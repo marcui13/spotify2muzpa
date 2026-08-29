@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spotify to Muzpa Studio</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            spotify: '#1DB954',
+            'spotify-dark': '#121212',
+            'spotify-card': '#181818',
+            'spotify-card-hover': '#282828',
+            'spotify-light': '#222222',
+            'spotify-muted': '#b3b3b3'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #121212;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #2a2a2a;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3e3e3e;
+    }
+    .badge-completed { @apply bg-emerald-950/80 text-emerald-400 border border-emerald-800; }
+    .badge-searching { @apply bg-cyan-950/80 text-cyan-400 border border-cyan-800 animate-pulse; }
+    .badge-waiting_confirmation { @apply bg-amber-950/80 text-amber-400 border border-amber-800 animate-bounce; }
+    .badge-downloading { @apply bg-purple-950/80 text-purple-400 border border-purple-800 animate-pulse; }
+    .badge-pending { @apply bg-neutral-900 text-neutral-400 border border-neutral-800; }
+    .badge-skipped { @apply bg-zinc-900 text-zinc-500 border border-zinc-800; }
+    .badge-not_found { @apply bg-orange-950/80 text-orange-400 border border-orange-800; }
+    .badge-error { @apply bg-rose-950/80 text-rose-400 border border-rose-800; }
+  </style>
+</head>
+<body class="bg-spotify-dark text-white min-h-screen flex flex-col font-sans selection:bg-spotify selection:text-black">
+
+  <!-- Header / Top Bar -->
+  <header class="border-b border-white/10 bg-spotify-card/80 backdrop-blur-md sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-full bg-spotify flex items-center justify-center text-black font-bold shadow-lg shadow-spotify/20">
+        <i class="fa-brands fa-spotify text-2xl"></i>
+      </div>
+      <div>
+        <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+          Spotify <i class="fa-solid fa-arrow-right text-xs text-spotify"></i> Muzpa Studio
+          <span class="text-[10px] bg-spotify/20 text-spotify px-2 py-0.5 rounded-full font-mono font-medium border border-spotify/30">v2.0 Native</span>
+        </h1>
+        <p class="text-xs text-spotify-muted">Automated Fuzzy Crawler & Resilient Audio Downloader</p>
+      </div>
+    </div>
+
+    <!-- Global Controls -->
+    <div class="flex items-center gap-4">
+      <!-- Auto Mode Toggle -->
+      <div class="flex items-center gap-2 bg-spotify-light/80 border border-white/10 px-3 py-1.5 rounded-full">
+        <span class="text-xs font-medium text-neutral-300">Auto Mode</span>
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="autoModeToggle" class="sr-only peer" onchange="toggleAutoMode(this.checked)">
+          <div class="w-9 h-5 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-spotify"></div>
+        </label>
+      </div>
+
+      <!-- Threshold Slider -->
+      <div class="flex items-center gap-2 bg-spotify-light/80 border border-white/10 px-3 py-1.5 rounded-full text-xs text-neutral-300">
+        <span>Min Score:</span>
+        <input type="range" id="thresholdSlider" min="50" max="95" step="5" value="75" class="w-20 accent-spotify cursor-pointer" onchange="updateThreshold(this.value)">
+        <span id="thresholdValue" class="font-mono text-spotify font-semibold">75%</span>
+      </div>
+
+      <!-- Muzpa Account & Auto-fill Button -->
+      <button onclick="openMuzpaModal()" title="Configure Muzpa Credentials & Auto-fill" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-spotify-light hover:bg-neutral-700 border border-white/10 text-xs font-semibold text-neutral-200 transition">
+        <i class="fa-solid fa-key text-amber-400"></i> <span id="muzpaCredsLabel">Muzpa Login</span>
+      </button>
+
+      <!-- Focus Muzpa Tab Button -->
+      <button onclick="focusTab('muzpa')" title="Bring Muzpa search tab to front" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-spotify-light hover:bg-neutral-700 border border-white/10 text-xs font-semibold text-neutral-200 transition">
+        <i class="fa-solid fa-arrow-up-right-from-square text-spotify"></i> Muzpa Tab
+      </button>
+
+      <!-- Pause / Resume Button -->
+      <button id="pauseBtn" onclick="togglePause()" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-spotify-light hover:bg-neutral-700 border border-white/10 text-xs font-semibold transition">
+        <i class="fa-solid fa-pause text-amber-400"></i> Pause
+      </button>
+
+      <!-- Connection Status -->
+      <div id="connStatus" class="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-950/50 border border-emerald-800/60 px-2.5 py-1 rounded-full">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> WS Live
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col gap-6">
+
+    <!-- Playlist Loader Card -->
+    <section class="bg-spotify-card border border-white/10 rounded-2xl p-5 shadow-2xl relative overflow-hidden">
+      <div class="absolute -right-20 -top-20 w-60 h-60 bg-spotify/10 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="flex flex-col md:flex-row gap-4 items-center justify-between relative z-10">
+        <div class="w-full flex-1">
+          <label class="block text-xs font-medium text-spotify-muted mb-1.5 uppercase tracking-wider">Spotify Playlist URL or URI</label>
+          <div class="flex gap-2">
+            <div class="relative flex-1">
+              <i class="fa-brands fa-spotify absolute left-3.5 top-1/2 -translate-y-1/2 text-spotify-muted text-base"></i>
+              <input type="text" id="playlistInput" placeholder="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M..." 
+                class="w-full bg-spotify-light border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-spotify transition">
+            </div>
+            <button onclick="loadPlaylist()" id="loadBtn" class="bg-spotify hover:bg-emerald-400 text-black font-bold px-6 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow-lg shadow-spotify/25 shrink-0">
+              <i class="fa-solid fa-cloud-arrow-down"></i> Load Playlist
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Playlist Info Banner (Hidden until loaded) -->
+      <div id="playlistBanner" class="hidden mt-5 pt-5 border-t border-white/10 flex flex-col md:flex-row gap-5 items-center justify-between">
+        <div class="flex items-center gap-4">
+          <img id="playlistCover" src="" alt="Cover" class="w-16 h-16 rounded-xl object-cover border border-white/10 shadow-md bg-neutral-900">
+          <div>
+            <h2 id="playlistTitle" class="text-lg font-bold text-white leading-tight">Playlist Name</h2>
+            <p id="playlistMeta" class="text-xs text-spotify-muted mt-0.5">0 tracks</p>
+            <p id="playlistSavePath" class="text-[11px] text-spotify font-mono mt-1 flex items-center gap-1.5"><i class="fa-solid fa-folder-open"></i> ~/Downloads/<span id="folderName"></span></p>
+          </div>
+        </div>
+
+        <!-- Progress Overview & Reset Controls -->
+        <div class="w-full md:w-1/2 flex flex-col gap-2">
+          <div class="flex justify-between items-center text-xs">
+            <span class="font-medium text-neutral-300">Overall Progress</span>
+            <div class="flex items-center gap-3">
+              <div class="flex items-center gap-1">
+                <button onclick="resetPlaylist('all')" title="Reset entire playlist to start from beginning" class="px-2 py-0.5 bg-spotify-light hover:bg-neutral-700 text-neutral-300 border border-white/10 rounded text-[11px] font-mono flex items-center gap-1 transition">
+                  <i class="fa-solid fa-rotate-left text-neutral-400"></i> Reset All
+                </button>
+                <button onclick="resetPlaylist('failed')" title="Retry only failed or skipped tracks" class="px-2 py-0.5 bg-spotify-light hover:bg-neutral-700 text-amber-300 border border-white/10 rounded text-[11px] font-mono flex items-center gap-1 transition">
+                  <i class="fa-solid fa-arrows-rotate text-amber-400"></i> Retry Failed
+                </button>
+              </div>
+              <span id="progressPercent" class="font-mono text-spotify font-bold text-sm">0%</span>
+            </div>
+          </div>
+          <div class="w-full bg-spotify-light h-2.5 rounded-full overflow-hidden border border-white/5">
+            <div id="progressBar" class="bg-spotify h-full w-0 transition-all duration-500 rounded-full"></div>
+          </div>
+          <div class="flex gap-3 text-[11px] text-neutral-400 font-mono justify-between">
+            <span id="statCompleted" class="text-emerald-400"><i class="fa-solid fa-circle-check"></i> 0 Done</span>
+            <span id="statPending" class="text-neutral-400"><i class="fa-regular fa-clock"></i> 0 Pending</span>
+            <span id="statSkipped" class="text-neutral-500"><i class="fa-solid fa-forward-step"></i> 0 Skipped</span>
+            <span id="statError" class="text-rose-400"><i class="fa-solid fa-triangle-exclamation"></i> 0 Errors</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Workspace Grid: 2 Columns -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      
+      <!-- Left Column: Track Queue List (5 cols) -->
+      <section class="lg:col-span-5 bg-spotify-card border border-white/10 rounded-2xl p-4 flex flex-col h-[680px] shadow-xl">
+        <div class="flex items-center justify-between mb-3 px-1">
+          <h3 class="text-sm font-bold text-neutral-200 flex items-center gap-2">
+            <i class="fa-solid fa-list-ol text-spotify"></i> Track Queue
+          </h3>
+          <div class="relative w-40">
+            <input type="text" id="trackSearchFilter" placeholder="Filter..." oninput="filterTracks(this.value)"
+              class="w-full bg-spotify-light border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-spotify">
+          </div>
+        </div>
+
+        <div id="trackList" class="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5">
+          <div class="h-full flex flex-col items-center justify-center text-spotify-muted text-xs text-center p-6">
+            <i class="fa-solid fa-music text-3xl mb-2 text-neutral-700"></i>
+            Paste a Spotify playlist URL above to inspect and download tracks.
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Active Matcher & Live Download Activity (7 cols) -->
+      <section class="lg:col-span-7 flex flex-col gap-5">
+        
+        <!-- Active Review Card -->
+        <div class="bg-spotify-card border border-white/10 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col gap-4">
+          <div class="flex items-center justify-between border-b border-white/10 pb-3">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-spotify animate-ping"></span>
+              <h3 class="text-sm font-bold text-white uppercase tracking-wider">Spotlight & Match Decision</h3>
+            </div>
+            <span id="activeStatusBadge" class="text-xs px-2.5 py-0.5 rounded-full font-mono badge-pending">STANDBY</span>
+          </div>
+
+          <!-- Selected Track Summary -->
+          <div id="activeTrackBox" class="flex gap-4 items-center bg-spotify-light/60 p-3.5 rounded-xl border border-white/5 relative">
+            <img id="activeCover" src="https://via.placeholder.com/80x80/222222/888888?text=Track" alt="Cover" class="w-16 h-16 rounded-lg object-cover bg-neutral-900 border border-white/10 shrink-0">
+            <div class="flex-1 min-w-0">
+              <h4 id="activeTitle" class="text-base font-bold text-white truncate">No Track Selected</h4>
+              <p id="activeArtist" class="text-xs text-spotify truncate mt-0.5 font-medium">Artist Name</p>
+              <div class="flex items-center gap-3 text-[11px] text-spotify-muted mt-1">
+                <span id="activeAlbum" class="truncate"><i class="fa-solid fa-compact-disc text-[10px]"></i> Album</span>
+                <span id="activeDuration"><i class="fa-regular fa-clock text-[10px]"></i> 0:00</span>
+                <a id="activeSpotifyLink" href="#" target="_blank" class="text-spotify hover:underline flex items-center gap-1">Spotify <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i></a>
+              </div>
+            </div>
+          </div>
+
+          <!-- Instant Decision Loader Indicator -->
+          <div id="decisionLoader" class="hidden bg-spotify/15 border border-spotify/40 text-spotify text-xs font-semibold px-3 py-2 rounded-xl flex items-center justify-center gap-2 animate-pulse">
+            <i class="fa-solid fa-circle-notch fa-spin text-sm"></i>
+            <span id="decisionLoaderText">Enqueuing download & searching next track in background...</span>
+          </div>
+
+          <!-- Search Query Bar -->
+          <div class="flex gap-2 items-center">
+            <div class="relative flex-1">
+              <input type="text" id="searchQueryInput" placeholder="Muzpa search query (Artist - Title)..." 
+                class="w-full bg-spotify-light border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-spotify">
+            </div>
+            <button onclick="reSearchCurrentTrack()" class="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-white/10 text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
+              <i class="fa-solid fa-magnifying-glass text-spotify"></i> Re-search
+            </button>
+            <button onclick="resetCurrentTrack()" title="Reset this track state and re-search" class="bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-white/10 text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
+              <i class="fa-solid fa-rotate-left text-cyan-400"></i> Reset
+            </button>
+            <button onclick="skipCurrentTrack()" class="bg-neutral-800 hover:bg-rose-950 text-neutral-300 hover:text-rose-400 border border-white/10 text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
+              <i class="fa-solid fa-forward"></i> Skip
+            </button>
+          </div>
+
+          <!-- Candidates Container -->
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between text-xs font-semibold text-neutral-300">
+              <span>Muzpa Matches Found (<span id="candidateCount">0</span>)</span>
+              <span class="text-[11px] text-spotify-muted">Click to confirm & auto-advance</span>
+            </div>
+
+            <div id="candidatesList" class="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
+              <div class="text-xs text-neutral-500 text-center py-6 border border-dashed border-white/10 rounded-xl">
+                No search performed yet.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Background Downloads Activity Tracker Widget with Tabs -->
+        <div class="bg-spotify-card border border-white/10 rounded-2xl p-4 shadow-xl flex flex-col gap-3">
+          <!-- Widget Header & Tab Switcher -->
+          <div class="flex items-center justify-between border-b border-white/10 pb-2.5">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-cloud-arrow-down text-purple-400 text-sm"></i>
+              <h4 class="text-xs font-bold text-white uppercase tracking-wider">Downloads Manager</h4>
+            </div>
+
+            <!-- Tab Buttons -->
+            <div class="flex items-center gap-1 bg-spotify-light/80 p-0.5 rounded-lg border border-white/5 text-xs font-semibold">
+              <button id="tabActiveBtn" onclick="switchDownloadTab('active')" class="px-2.5 py-1 rounded-md bg-neutral-700 text-white flex items-center gap-1.5 transition">
+                <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+                <span>Active</span>
+                <span id="activeDownloadsBadge" class="bg-purple-950 text-purple-300 border border-purple-800 text-[10px] font-mono px-1.5 py-0.2 rounded-full">0</span>
+              </button>
+              <button id="tabCompletedBtn" onclick="switchDownloadTab('completed')" class="px-2.5 py-1 rounded-md text-neutral-400 hover:text-white flex items-center gap-1.5 transition">
+                <i class="fa-solid fa-circle-check text-emerald-400 text-[11px]"></i>
+                <span>Completed</span>
+                <span id="completedDownloadsCount" class="bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-mono px-1.5 py-0.2 rounded-full">0</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Tab 1: Active Downloading Items -->
+          <div id="activeTabContent" class="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+            <div id="activeDownloadsList" class="flex flex-col gap-1.5">
+              <div class="text-[11px] text-neutral-500 text-center py-3 border border-dashed border-white/5 rounded-xl font-mono">
+                No active downloads in queue.
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 2: Completed / Saved Items -->
+          <div id="completedTabContent" class="hidden flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+            <div id="completedDownloadsList" class="flex flex-col gap-1.5">
+              <div class="text-[11px] text-neutral-500 text-center py-3 border border-dashed border-white/5 rounded-xl font-mono">
+                No completed tracks yet.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Real-time Live Log Console -->
+        <div class="bg-black border border-white/10 rounded-2xl p-4 flex flex-col h-40 shadow-xl">
+          <div class="flex items-center justify-between mb-2 pb-1 border-b border-white/10">
+            <span class="text-xs font-mono font-semibold text-neutral-400 flex items-center gap-1.5">
+              <i class="fa-solid fa-terminal text-spotify"></i> Real-time Execution Logs
+            </span>
+            <button onclick="clearLogs()" class="text-[11px] text-neutral-500 hover:text-neutral-300 font-mono">Clear</button>
+          </div>
+          <div id="logConsole" class="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed text-neutral-300 flex flex-col gap-0.5"></div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Muzpa Login Modal -->
+  <div id="muzpaModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div class="bg-spotify-card border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-key text-amber-400"></i> Muzpa Credentials & Auto-fill
+        </h3>
+        <button onclick="closeMuzpaModal()" class="text-neutral-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p class="text-xs text-spotify-muted mb-4">
+        Enter your Muzpa account email and password. They will be saved to your local <code class="bg-black/50 px-1.5 py-0.5 rounded text-spotify font-mono">.env</code> and auto-filled directly into the Muzpa login page whenever it opens.
+      </p>
+      <div class="flex flex-col gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-neutral-300 mb-1">Email / Username</label>
+          <input type="text" id="muzpaEmailInput" placeholder="your_email@example.com" class="w-full bg-spotify-light border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-spotify">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-neutral-300 mb-1">Password</label>
+          <input type="password" id="muzpaPasswordInput" placeholder="••••••••" class="w-full bg-spotify-light border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-spotify">
+        </div>
+        <div class="flex items-center gap-2 mt-1">
+          <input type="checkbox" id="muzpaAutoSubmit" class="rounded bg-spotify-light border-white/10 text-spotify focus:ring-0">
+          <label for="muzpaAutoSubmit" class="text-xs text-neutral-300 cursor-pointer">Auto-submit login form after filling</label>
+        </div>
+        <div id="muzpaModalMsg" class="hidden text-xs py-2 px-3 rounded-lg mt-1 font-mono"></div>
+      </div>
+      <div class="flex gap-2 justify-end mt-6 pt-3 border-t border-white/10">
+        <button onclick="triggerAutoFillOnly()" class="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold px-4 py-2 rounded-xl transition">
+          Auto-fill Tab Now
+        </button>
+        <button onclick="saveMuzpaCredentials()" class="bg-spotify hover:bg-emerald-400 text-black text-xs font-bold px-5 py-2 rounded-xl transition shadow-lg shadow-spotify/20">
+          Save & Auto-fill
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeJob = null;
+    let ws = null;
+    let autoMode = false;
+    let currentTrackId = null;
+    let isPausedState = false;
+
+    // Initialize on load
+    document.addEventListener("DOMContentLoaded", () => {
+      initWebSocket();
+      fetchState();
+      checkMuzpaCredentials();
+    });
+
+    // Muzpa Credentials Modal & Auto-fill Handlers
+    async function checkMuzpaCredentials() {
+      try {
+        const res = await fetch("/api/muzpa/credentials");
+        const data = await res.json();
+        if (data.configured) {
+          document.getElementById("muzpaCredsLabel").innerText = "Muzpa: " + data.email.split("@")[0];
+          document.getElementById("muzpaEmailInput").value = data.email;
+        }
+      } catch (e) {
+        console.debug("Credentials check notice:", e);
+      }
+    }
+
+    function openMuzpaModal() {
+      document.getElementById("muzpaModal").classList.remove("hidden");
+      document.getElementById("muzpaModalMsg").classList.add("hidden");
+    }
+
+    function closeMuzpaModal() {
+      document.getElementById("muzpaModal").classList.add("hidden");
+    }
+
+    async function saveMuzpaCredentials() {
+      const email = document.getElementById("muzpaEmailInput").value.trim();
+      const password = document.getElementById("muzpaPasswordInput").value.trim();
+      const autoSubmit = document.getElementById("muzpaAutoSubmit").checked;
+      const msgBox = document.getElementById("muzpaModalMsg");
+
+      if (!email || !password) {
+        msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-rose-950/80 text-rose-400 border border-rose-800";
+        msgBox.innerText = "Please provide both email/username and password.";
+        msgBox.classList.remove("hidden");
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/muzpa/credentials", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email, password: password, auto_submit: autoSubmit })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800";
+          msgBox.innerText = "✓ Saved to .env and auto-filled in Muzpa tab!";
+          msgBox.classList.remove("hidden");
+          document.getElementById("muzpaCredsLabel").innerText = "Muzpa: " + email.split("@")[0];
+          setTimeout(closeMuzpaModal, 1500);
+        } else {
+          msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-rose-950/80 text-rose-400 border border-rose-800";
+          msgBox.innerText = "Error: " + (data.detail || "Could not save");
+          msgBox.classList.remove("hidden");
+        }
+      } catch (e) {
+        msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-rose-950/80 text-rose-400 border border-rose-800";
+        msgBox.innerText = "Error: " + e.message;
+        msgBox.classList.remove("hidden");
+      }
+    }
+
+    async function triggerAutoFillOnly() {
+      const msgBox = document.getElementById("muzpaModalMsg");
+      const autoSubmit = document.getElementById("muzpaAutoSubmit").checked;
+      try {
+        const res = await fetch("/api/muzpa/autofill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ submit: autoSubmit, focus: true })
+        });
+        const data = await res.json();
+        msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800";
+        msgBox.innerText = data.status === "success" ? "✓ Auto-filled in Muzpa tab!" : "Notice: Login form not currently visible on page.";
+        msgBox.classList.remove("hidden");
+      } catch (e) {
+        msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-rose-950/80 text-rose-400 border border-rose-800";
+        msgBox.innerText = "Error: " + e.message;
+        msgBox.classList.remove("hidden");
+      }
+    }
+
+    // WebSocket Management
+    function initWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        const badge = document.getElementById("connStatus");
+        badge.className = "flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-950/50 border border-emerald-800/60 px-2.5 py-1 rounded-full";
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> WS Live`;
+      };
+
+      ws.onclose = () => {
+        const badge = document.getElementById("connStatus");
+        badge.className = "flex items-center gap-1.5 text-xs text-rose-400 bg-rose-950/50 border border-rose-800/60 px-2.5 py-1 rounded-full";
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span> Reconnecting...`;
+        setTimeout(initWebSocket, 2500);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          handleWebSocketMessage(payload);
+        } catch (e) {
+          console.error("WS Parse error:", e);
+        }
+      };
+    }
+
+    function handleWebSocketMessage(msg) {
+      if (msg.type === "log") {
+        appendLog(msg.data);
+      } else if (msg.type === "log_history") {
+        const logBox = document.getElementById("logConsole");
+        logBox.innerHTML = "";
+        msg.data.forEach(entry => appendLog(entry));
+      } else if (msg.type === "state_updated" || msg.type === "job_started" || msg.type === "initial_state") {
+        activeJob = msg.data;
+        renderJob(activeJob);
+      } else if (msg.type === "waiting_decision") {
+        const trackState = msg.data;
+        currentTrackId = msg.track_id;
+        document.getElementById("decisionLoader").classList.add("hidden");
+        renderActiveTrack(trackState);
+        fetchState();
+      } else if (msg.type === "track_searching") {
+        document.getElementById("decisionLoader").classList.add("hidden");
+      } else if (msg.type === "download_started" || msg.type === "download_success" || msg.type === "download_failed") {
+        if (msg.queue_summary) {
+          renderActiveDownloads(msg.queue_summary);
+        }
+        fetchState();
+      } else if (msg.type === "job_paused") {
+        isPausedState = true;
+        updatePauseButton();
+      } else if (msg.type === "job_resumed") {
+        isPausedState = false;
+        updatePauseButton();
+      }
+    }
+
+    function appendLog(log) {
+      const box = document.getElementById("logConsole");
+      const div = document.createElement("div");
+      let color = "text-neutral-300";
+      if (log.level === "INFO") color = "text-neutral-300";
+      if (log.level === "WARNING") color = "text-amber-400";
+      if (log.level === "ERROR") color = "text-rose-400 font-semibold";
+
+      div.className = `${color} flex gap-2`;
+      div.innerHTML = `<span class="text-neutral-500 shrink-0">[${log.timestamp}]</span> <span>${escapeHtml(log.message)}</span>`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById("logConsole").innerHTML = "";
+    }
+
+    // API Calls
+    async function fetchState() {
+      try {
+        const res = await fetch("/api/state");
+        const data = await res.json();
+        if (data.active && data.job) {
+          activeJob = data.job;
+          renderJob(activeJob);
+        }
+        if (data.queue_summary) {
+          renderActiveDownloads(data.queue_summary);
+        }
+      } catch (e) {
+        console.error("Error fetching state:", e);
+      }
+    }
+
+    async function loadPlaylist() {
+      const input = document.getElementById("playlistInput");
+      const url = input.value.trim();
+      if (!url) return alert("Please enter a valid Spotify playlist URL");
+
+      const btn = document.getElementById("loadBtn");
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Loading...`;
+
+      try {
+        const res = await fetch("/api/playlist/load", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playlist_url: url,
+            auto_mode: autoMode,
+            similarity_threshold: parseFloat(document.getElementById("thresholdSlider").value)
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(`Error: ${data.detail || "Could not load playlist"}`);
+        } else {
+          activeJob = data.job;
+          renderJob(activeJob);
+        }
+      } catch (e) {
+        alert(`Request failed: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-cloud-arrow-down"></i> Load Playlist`;
+      }
+    }
+
+    async function confirmCandidate(candidateId) {
+      if (!currentTrackId) return;
+
+      // Show immediate decision loader
+      const loader = document.getElementById("decisionLoader");
+      loader.classList.remove("hidden");
+      document.getElementById("decisionLoaderText").innerText = "⚡ Track queued! Enqueuing download and searching next song...";
+
+      await fetch("/api/track/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          track_id: currentTrackId,
+          action: "confirm",
+          candidate_id: candidateId
+        })
+      });
+    }
+
+    async function skipCurrentTrack() {
+      if (!currentTrackId) return;
+      const loader = document.getElementById("decisionLoader");
+      loader.classList.remove("hidden");
+      document.getElementById("decisionLoaderText").innerText = "Skipping track and loading next...";
+
+      await fetch("/api/track/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          track_id: currentTrackId,
+          action: "skip"
+        })
+      });
+    }
+
+    async function reSearchCurrentTrack() {
+      if (!currentTrackId) return;
+      const customQuery = document.getElementById("searchQueryInput").value.trim();
+      const loader = document.getElementById("decisionLoader");
+      loader.classList.remove("hidden");
+      document.getElementById("decisionLoaderText").innerText = "Re-searching Muzpa with custom query...";
+
+      await fetch("/api/track/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          track_id: currentTrackId,
+          action: "custom_search",
+          custom_query: customQuery
+        })
+      });
+    }
+
+    async function resetPlaylist(scope) {
+      if (scope === "all" && !confirm("Are you sure you want to reset all tracks in the playlist back to pending?")) {
+        return;
+      }
+      try {
+        await fetch("/api/playlist/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope: scope })
+        });
+        fetchState();
+      } catch (e) {
+        alert("Error resetting playlist: " + e.message);
+      }
+    }
+
+    async function resetCurrentTrack() {
+      if (!currentTrackId) return;
+      try {
+        await fetch("/api/track/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ track_id: currentTrackId })
+        });
+        fetchState();
+      } catch (e) {
+        alert("Error resetting track: " + e.message);
+      }
+    }
+
+    async function resetTrackById(trackId, event) {
+      if (event) event.stopPropagation();
+      try {
+        await fetch("/api/track/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ track_id: trackId })
+        });
+        fetchState();
+      } catch (e) {
+        alert("Error resetting track: " + e.message);
+      }
+    }
+
+    async function jumpToTrack(trackId) {
+      await fetch("/api/track/jump", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_id: trackId })
+      });
+    }
+
+    async function focusTab(target) {
+      await fetch("/api/browser/focus", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: target })
+      });
+    }
+
+    async function togglePause() {
+      if (isPausedState) {
+        await fetch("/api/orchestrator/resume", { method: "POST" });
+      } else {
+        await fetch("/api/orchestrator/pause", { method: "POST" });
+      }
+    }
+
+    function updatePauseButton() {
+      const btn = document.getElementById("pauseBtn");
+      if (isPausedState) {
+        btn.innerHTML = `<i class="fa-solid fa-play text-emerald-400"></i> Resume`;
+        btn.className = "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-950 hover:bg-emerald-900 border border-emerald-700 text-xs font-semibold text-emerald-300 transition";
+      } else {
+        btn.innerHTML = `<i class="fa-solid fa-pause text-amber-400"></i> Pause`;
+        btn.className = "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-spotify-light hover:bg-neutral-700 border border-white/10 text-xs font-semibold transition";
+      }
+    }
+
+    async function toggleAutoMode(checked) {
+      autoMode = checked;
+      await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_mode: checked })
+      });
+    }
+
+    async function updateThreshold(val) {
+      document.getElementById("thresholdValue").innerText = `${val}%`;
+      await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ similarity_threshold: parseFloat(val) })
+      });
+    }
+
+    // UI Rendering
+    function renderJob(job) {
+      if (!job) return;
+
+      // Banner
+      const banner = document.getElementById("playlistBanner");
+      banner.classList.remove("hidden");
+      document.getElementById("playlistTitle").innerText = job.playlist_name;
+      document.getElementById("playlistMeta").innerText = `${job.tracks.length} tracks • ${job.playlist_url}`;
+      document.getElementById("folderName").innerText = job.playlist_name;
+      if (job.playlist_image) {
+        document.getElementById("playlistCover").src = job.playlist_image;
+      }
+
+      // Stats
+      const stats = calculateStats(job.tracks);
+      document.getElementById("statCompleted").innerHTML = `<i class="fa-solid fa-circle-check text-emerald-400"></i> ${stats.COMPLETED} Done`;
+      document.getElementById("statPending").innerHTML = `<i class="fa-regular fa-clock"></i> ${stats.PENDING} Pending`;
+      document.getElementById("statSkipped").innerHTML = `<i class="fa-solid fa-forward-step"></i> ${stats.SKIPPED} Skipped`;
+      document.getElementById("statError").innerHTML = `<i class="fa-solid fa-triangle-exclamation text-rose-400"></i> ${stats.ERROR} Errors`;
+      
+      const percent = Math.round(((stats.COMPLETED + stats.SKIPPED) / Math.max(job.tracks.length, 1)) * 100);
+      document.getElementById("progressPercent").innerText = `${percent}%`;
+      document.getElementById("progressBar").style.width = `${percent}%`;
+
+      // Auto Mode Sync
+      document.getElementById("autoModeToggle").checked = job.auto_mode;
+      document.getElementById("thresholdSlider").value = job.similarity_threshold;
+      document.getElementById("thresholdValue").innerText = `${job.similarity_threshold}%`;
+
+      // Track List
+      renderTrackList(job.tracks, job.current_track_index);
+
+      // Active Track Spotlight
+      if (job.tracks.length > 0 && job.current_track_index < job.tracks.length) {
+        const currentTrack = job.tracks[job.current_track_index];
+        currentTrackId = currentTrack.spotify_track.id;
+        renderActiveTrack(currentTrack);
+      }
+    }
+
+    let currentDownloadTab = 'active';
+
+    function switchDownloadTab(tab) {
+      currentDownloadTab = tab;
+      const activeBtn = document.getElementById("tabActiveBtn");
+      const completedBtn = document.getElementById("tabCompletedBtn");
+      const activeContent = document.getElementById("activeTabContent");
+      const completedContent = document.getElementById("completedTabContent");
+
+      if (tab === 'active') {
+        activeBtn.className = "px-2.5 py-1 rounded-md bg-neutral-700 text-white flex items-center gap-1.5 transition";
+        completedBtn.className = "px-2.5 py-1 rounded-md text-neutral-400 hover:text-white flex items-center gap-1.5 transition";
+        activeContent.classList.remove("hidden");
+        completedContent.classList.add("hidden");
+      } else {
+        completedBtn.className = "px-2.5 py-1 rounded-md bg-neutral-700 text-white flex items-center gap-1.5 transition";
+        activeBtn.className = "px-2.5 py-1 rounded-md text-neutral-400 hover:text-white flex items-center gap-1.5 transition";
+        completedContent.classList.remove("hidden");
+        activeContent.classList.add("hidden");
+      }
+    }
+
+    function renderActiveDownloads(summary) {
+      if (!summary) return;
+      document.getElementById("activeDownloadsBadge").innerText = `${summary.active_count}`;
+      const completedCount = summary.completed_list ? summary.completed_list.length : 0;
+      document.getElementById("completedDownloadsCount").innerText = `${completedCount}`;
+
+      // 1. Render Active Tab Content
+      const activeContainer = document.getElementById("activeDownloadsList");
+      activeContainer.innerHTML = "";
+
+      if (!summary.active_list || summary.active_list.length === 0) {
+        activeContainer.innerHTML = `<div class="text-[11px] text-neutral-500 text-center py-3 border border-dashed border-white/5 rounded-xl font-mono">No active downloads in queue.</div>`;
+      } else {
+        summary.active_list.forEach(item => {
+          const row = document.createElement("div");
+          row.className = "p-2.5 rounded-xl bg-purple-950/40 border border-purple-800/60 flex items-center justify-between gap-2 shadow-sm animate-pulse";
+          row.innerHTML = `
+            <div class="flex items-center gap-2.5 min-w-0">
+              <i class="fa-solid fa-circle-notch fa-spin text-purple-400 text-xs"></i>
+              <div class="min-w-0">
+                <p class="text-xs font-bold text-white truncate">${escapeHtml(item.title)}</p>
+                <p class="text-[10px] text-neutral-400 truncate">${escapeHtml(item.artist)}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="text-[10px] bg-purple-900/80 text-purple-200 border border-purple-700 px-2 py-0.5 rounded font-mono">${item.status}</span>
+              <span class="text-[9px] text-neutral-500 font-mono">${item.started_at}</span>
+            </div>
+          `;
+          activeContainer.appendChild(row);
+        });
+      }
+
+      // 2. Render Completed Tab Content
+      const completedContainer = document.getElementById("completedDownloadsList");
+      completedContainer.innerHTML = "";
+
+      if (!summary.completed_list || summary.completed_list.length === 0) {
+        completedContainer.innerHTML = `<div class="text-[11px] text-neutral-500 text-center py-3 border border-dashed border-white/5 rounded-xl font-mono">No completed tracks yet.</div>`;
+      } else {
+        summary.completed_list.slice().reverse().forEach(item => {
+          const row = document.createElement("div");
+          row.className = "p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-800/40 flex items-center justify-between gap-2 shadow-sm hover:border-emerald-700/60 transition";
+          row.innerHTML = `
+            <div class="flex items-center gap-2.5 min-w-0">
+              <i class="fa-solid fa-circle-check text-emerald-400 text-xs"></i>
+              <div class="min-w-0">
+                <p class="text-xs font-bold text-white truncate">${escapeHtml(item.title)}</p>
+                <p class="text-[10px] text-spotify-muted truncate flex items-center gap-1">
+                  <span>${escapeHtml(item.artist)}</span>
+                  <span class="text-neutral-600">•</span>
+                  <span class="text-neutral-400 font-mono"><i class="fa-solid fa-file-audio text-[9px] mr-0.5"></i>${escapeHtml(item.filename || 'audio.mp3')}</span>
+                </p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-mono">Saved</span>
+              <span class="text-[9px] text-neutral-500 font-mono">${item.completed_at || '✓'}</span>
+            </div>
+          `;
+          completedContainer.appendChild(row);
+        });
+      }
+    }
+
+    function calculateStats(tracks) {
+      const counts = { COMPLETED: 0, PENDING: 0, SKIPPED: 0, ERROR: 0 };
+      tracks.forEach(t => {
+        if (t.status === "COMPLETED") counts.COMPLETED++;
+        else if (t.status === "SKIPPED") counts.SKIPPED++;
+        else if (t.status === "ERROR" || t.status === "NOT_FOUND") counts.ERROR++;
+        else counts.PENDING++;
+      });
+      return counts;
+    }
+
+    function renderTrackList(tracks, currentIndex) {
+      const container = document.getElementById("trackList");
+      container.innerHTML = "";
+
+      tracks.forEach((t, i) => {
+        const isCurrent = (i === currentIndex);
+        const tr = t.spotify_track;
+        const item = document.createElement("div");
+        item.className = `p-2.5 rounded-xl border transition flex items-center justify-between cursor-pointer group ${
+          isCurrent ? 'bg-spotify/15 border-spotify/50 shadow-md' : 'bg-spotify-light/40 border-white/5 hover:bg-spotify-light'
+        }`;
+        item.onclick = () => jumpToTrack(tr.id);
+
+        let statusIcon = "";
+        let statusClass = `badge-${t.status.toLowerCase()}`;
+        if (t.status === "DOWNLOADING") {
+          statusIcon = '<i class="fa-solid fa-circle-notch fa-spin text-purple-400 mr-1"></i>';
+        } else if (t.status === "COMPLETED") {
+          statusIcon = '<i class="fa-solid fa-check text-emerald-400 mr-1"></i>';
+        }
+
+        item.innerHTML = `
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="text-xs font-mono ${isCurrent ? 'text-spotify font-bold' : 'text-neutral-500'} w-5 text-right">${i + 1}</span>
+            <div class="min-w-0">
+              <p class="text-xs font-semibold text-white truncate ${isCurrent ? 'text-spotify' : ''}">${escapeHtml(tr.title)}</p>
+              <p class="text-[11px] text-spotify-muted truncate">${escapeHtml(tr.artist)}</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            ${tr.bpm ? `<span class="text-[9px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-1.5 py-0.5 rounded" title="BPM"><i class="fa-solid fa-gauge text-[8px] mr-0.5"></i>${tr.bpm}</span>` : ''}
+            ${tr.camelot_key ? `<span class="text-[9px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5"></i>${tr.camelot_key}</span>` : ''}
+            <span class="text-[10px] font-mono text-neutral-500">${tr.duration_str}</span>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full ${statusClass}">${statusIcon}${t.status}</span>
+            <button onclick="resetTrackById('${tr.id}', event)" title="Reset this track state" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-cyan-400 p-1 rounded text-xs transition">
+              <i class="fa-solid fa-rotate-left"></i>
+            </button>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function renderActiveTrack(trackState) {
+      if (!trackState) return;
+      const tr = trackState.spotify_track;
+
+      document.getElementById("activeTitle").innerText = tr.title;
+      document.getElementById("activeArtist").innerText = tr.artist;
+      document.getElementById("activeAlbum").innerHTML = `<i class="fa-solid fa-compact-disc text-[10px]"></i> ${tr.album}`;
+      
+      let durationHtml = `<i class="fa-regular fa-clock text-[10px]"></i> ${tr.duration_str}`;
+      if (tr.bpm) {
+        durationHtml += ` • <span class="text-cyan-400 font-mono"><i class="fa-solid fa-gauge text-[10px]"></i> ${tr.bpm} BPM</span>`;
+      }
+      if (tr.camelot_key) {
+        durationHtml += ` • <span class="text-amber-300 font-mono"><i class="fa-solid fa-music text-[10px]"></i> ${tr.camelot_key}${tr.musical_key ? ' (' + tr.musical_key + ')' : ''}</span>`;
+      }
+      document.getElementById("activeDuration").innerHTML = durationHtml;
+      document.getElementById("activeSpotifyLink").href = tr.spotify_url || "#";
+      
+      if (tr.image_url) {
+        document.getElementById("activeCover").src = tr.image_url;
+      }
+
+      const badge = document.getElementById("activeStatusBadge");
+      badge.className = `text-xs px-2.5 py-0.5 rounded-full font-mono badge-${trackState.status.toLowerCase()}`;
+      badge.innerText = trackState.status;
+
+      document.getElementById("searchQueryInput").value = `${tr.artist} - ${tr.title}`;
+
+      // Render candidates
+      const list = document.getElementById("candidatesList");
+      document.getElementById("candidateCount").innerText = trackState.candidates.length;
+      list.innerHTML = "";
+
+      if (trackState.candidates.length === 0) {
+        list.innerHTML = `<div class="text-xs text-neutral-500 text-center py-6 border border-dashed border-white/10 rounded-xl">
+          ${trackState.status === "SEARCHING" ? '<i class="fa-solid fa-spinner fa-spin text-spotify"></i> Searching Muzpa...' : 'No candidates available.'}
+        </div>`;
+        return;
+      }
+
+      trackState.candidates.forEach((cand, idx) => {
+        const item = document.createElement("div");
+        const isTop = (idx === 0);
+        let scoreColor = "bg-rose-500";
+        if (cand.score >= 80) scoreColor = "bg-emerald-500";
+        else if (cand.score >= 65) scoreColor = "bg-amber-500";
+
+        item.className = `p-3 rounded-xl border flex items-center justify-between gap-3 transition ${
+          isTop ? 'bg-spotify/10 border-spotify/40' : 'bg-spotify-light/50 border-white/5 hover:border-white/20'
+        }`;
+
+        item.innerHTML = `
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <p class="text-xs font-bold text-white truncate">${escapeHtml(cand.title)}</p>
+              ${isTop ? '<span class="text-[9px] bg-spotify text-black font-bold px-1.5 py-0.2 rounded">TOP MATCH</span>' : ''}
+            </div>
+            <p class="text-[11px] text-spotify-muted truncate mt-0.5">${escapeHtml(cand.artist)}</p>
+            <div class="flex items-center gap-3 text-[10px] text-neutral-400 mt-1">
+              <span><i class="fa-regular fa-clock"></i> ${cand.duration}</span>
+              ${cand.bitrate ? `<span class="bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-300 font-mono">${cand.bitrate}</span>` : ''}
+            </div>
+          </div>
+          
+          <div class="flex items-center gap-3 shrink-0">
+            <!-- Score Pill -->
+            <div class="flex flex-col items-end">
+              <span class="text-[11px] font-mono font-bold text-white">${cand.score}%</span>
+              <div class="w-12 h-1.5 bg-neutral-800 rounded-full overflow-hidden mt-0.5">
+                <div class="${scoreColor} h-full" style="width: ${cand.score}%"></div>
+              </div>
+            </div>
+
+            <!-- Action Button with instant feedback -->
+            <button onclick="confirmCandidate('${cand.id}')" class="px-3 py-1.5 bg-spotify hover:bg-emerald-400 text-black font-bold text-xs rounded-lg flex items-center gap-1 transition shadow">
+              <i class="fa-solid fa-download"></i> Download
+            </button>
+          </div>
+        `;
+        list.appendChild(item);
+      });
+    }
+
+    function filterTracks(query) {
+      const q = query.toLowerCase();
+      const items = document.querySelectorAll("#trackList > div");
+      items.forEach(el => {
+        const text = el.innerText.toLowerCase();
+        el.style.display = text.includes(q) ? "flex" : "none";
+      });
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+  </script>
+</body>
+</html>

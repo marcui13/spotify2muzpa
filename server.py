@@ -1,0 +1,609 @@
+"""
+FastAPI Server & Real-time Orchestrator for Spotify to Muzpa Downloader.
+Provides REST endpoints, WebSocket streaming, non-blocking download queues, and browser management.
+"""
+
+import os
+import re
+import json
+import asyncio
+import logging
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+
+from config import settings
+from models import (
+    TrackStatus,
+    SpotifyTrack,
+    MuzpaCandidate,
+    TrackState,
+    PlaylistJob,
+    DecisionRequest,
+    ConfigUpdateRequest,
+)
+from spotify_service import SpotifyService
+from muzpa_crawler import MuzpaCrawlerEngine, detect_available_browsers
+from downloader import MuzpaDownloader, StateManager, DownloadQueueManager
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("server")
+
+
+# Broadcast log handler
+class BroadcastLogHandler(logging.Handler):
+    def __init__(self, manager: "ConnectionManager"):
+        super().__init__()
+        self.manager = manager
+        self.log_history: List[Dict[str, str]] = []
+
+    def emit(self, record):
+        log_entry = {
+            "timestamp": datetime.fromtimestamp(record.created).strftime("%H:%M:%S"),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name
+        }
+        self.log_history.append(log_entry)
+        if len(self.log_history) > 200:
+            self.log_history.pop(0)
+
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                asyncio.create_task(self.manager.broadcast({"type": "log", "data": log_entry}))
+        except RuntimeError:
+            pass
+
+
+class ConnectionManager:
+    """Manages active WebSocket connections for live UI streaming."""
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: Dict[str, Any]):
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                self.disconnect(connection)
+
+
+manager = ConnectionManager()
+log_handler = BroadcastLogHandler(manager)
+logging.getLogger().addHandler(log_handler)
+
+
+class DownloadOrchestrator:
+    """Coordinates Playwright crawling, non-blocking download queues, and user confirmation."""
+    def __init__(self):
+        self.crawler = MuzpaCrawlerEngine(settings.BROWSER_NAME)
+        self.download_queue = DownloadQueueManager(self.crawler, on_update_callback=self._on_download_update)
+        self.current_job: Optional[PlaylistJob] = None
+        self.is_paused: bool = False
+        self.decision_events: Dict[str, asyncio.Event] = {}
+        self.user_decisions: Dict[str, Dict[str, Any]] = {}
+        self._worker_task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+
+    async def _on_download_update(self, event_data: Dict[str, Any]):
+        """Broadcasts download progress/completion and saves state."""
+        await manager.broadcast(event_data)
+        if self.current_job:
+            await manager.broadcast({"type": "state_updated", "data": self.current_job.model_dump()})
+
+    async def initialize(self, browser_name: Optional[str] = None, open_dashboard_tab: bool = True):
+        self.download_queue.start()
+        await self.crawler.initialize(browser_name=browser_name, open_dashboard_tab=open_dashboard_tab)
+
+    async def start_job(self, job: PlaylistJob):
+        async with self._lock:
+            self.current_job = job
+            self.is_paused = False
+            StateManager.save_job(job)
+
+            if self._worker_task and not self._worker_task.done():
+                self._worker_task.cancel()
+
+            self._worker_task = asyncio.create_task(self._run_orchestrator_loop())
+            await manager.broadcast({"type": "job_started", "data": job.model_dump()})
+
+    async def pause(self):
+        self.is_paused = True
+        if self.current_job:
+            self.current_job.is_running = False
+            StateManager.save_job(self.current_job)
+        await manager.broadcast({"type": "job_paused"})
+
+    async def resume(self):
+        self.is_paused = False
+        if self.current_job:
+            self.current_job.is_running = True
+            StateManager.save_job(self.current_job)
+            if not self._worker_task or self._worker_task.done():
+                self._worker_task = asyncio.create_task(self._run_orchestrator_loop())
+        await manager.broadcast({"type": "job_resumed"})
+
+    def provide_decision(self, track_id: str, action: str, candidate_id: Optional[str] = None, custom_query: Optional[str] = None):
+        self.user_decisions[track_id] = {
+            "action": action,
+            "candidate_id": candidate_id,
+            "custom_query": custom_query
+        }
+        if track_id in self.decision_events:
+            self.decision_events[track_id].set()
+
+    async def _run_orchestrator_loop(self):
+        """Main loop that iterates through tracks for search and confirmation."""
+        if not self.current_job:
+            return
+
+        self.current_job.is_running = True
+        logger.info(f"Starting playlist processing loop: '{self.current_job.playlist_name}'")
+
+        try:
+            await self.crawler.initialize(open_dashboard_tab=True)
+            self.download_queue.start()
+
+            for idx, track_state in enumerate(self.current_job.tracks):
+                if self.is_paused:
+                    logger.info("Processing loop paused by user.")
+                    break
+
+                self.current_job.current_track_index = idx
+
+                # Skip tracks that are already completed or already downloading in queue
+                if track_state.status in [TrackStatus.COMPLETED, TrackStatus.DOWNLOADING]:
+                    continue
+
+                if track_state.status in [TrackStatus.SKIPPED]:
+                    continue
+
+                await self._process_single_track(track_state)
+                StateManager.save_job(self.current_job)
+                await manager.broadcast({"type": "state_updated", "data": self.current_job.model_dump()})
+
+                await asyncio.sleep(settings.RATE_LIMIT_DELAY_SECONDS)
+
+            logger.info("Playlist review queue completed.")
+        except asyncio.CancelledError:
+            logger.info("Orchestrator worker loop cancelled.")
+        except Exception as e:
+            logger.error(f"Unexpected error in orchestrator loop: {e}", exc_info=True)
+        finally:
+            if self.current_job:
+                self.current_job.is_running = False
+                StateManager.save_job(self.current_job)
+                await manager.broadcast({"type": "job_finished", "data": self.current_job.model_dump()})
+
+    async def _process_single_track(self, track_state: TrackState):
+        """Searches and resolves a single track, enqueuing downloads asynchronously."""
+        track = track_state.spotify_track
+        track_id = track.id
+
+        logger.info(f"Processing track [{self.current_job.current_track_index + 1}/{len(self.current_job.tracks)}]: {track.artist} - {track.title}")
+        track_state.status = TrackStatus.SEARCHING
+        await manager.broadcast({"type": "track_searching", "track_id": track_id})
+
+        custom_query = None
+
+        while True:
+            # 1. Search Muzpa
+            try:
+                candidates = await self.crawler.search_track(track, custom_query=custom_query)
+                track_state.candidates = candidates
+            except Exception as e:
+                logger.error(f"Error during search for '{track.title}': {e}")
+                track_state.status = TrackStatus.ERROR
+                track_state.error_message = f"Search failed: {e}"
+                return
+
+            if not candidates:
+                logger.warning(f"No candidates found for '{track.title}'")
+                track_state.status = TrackStatus.NOT_FOUND
+                track_state.error_message = "No matching tracks found on Muzpa"
+                if self.current_job.auto_mode:
+                    return
+
+            top_candidate = candidates[0] if candidates else None
+            auto_threshold = self.current_job.similarity_threshold or settings.SIMILARITY_THRESHOLD
+
+            # Check if auto download criteria met
+            is_auto_eligible = (
+                self.current_job.auto_mode
+                and top_candidate is not None
+                and top_candidate.score >= auto_threshold
+            )
+
+            if is_auto_eligible:
+                logger.info(f"Auto-mode: Enqueuing top match '{top_candidate.title}' (Score {top_candidate.score}% >= {auto_threshold}%).")
+                self.download_queue.enqueue_download(self.current_job, track_state, top_candidate)
+                # Immediately advance to next track!
+                return
+
+            # Otherwise, wait for user confirmation
+            track_state.status = TrackStatus.WAITING_CONFIRMATION
+            StateManager.save_job(self.current_job)
+            await manager.broadcast({"type": "waiting_decision", "track_id": track_id, "data": track_state.model_dump()})
+
+            event = asyncio.Event()
+            self.decision_events[track_id] = event
+
+            # Wait until user submits decision
+            await event.wait()
+            self.decision_events.pop(track_id, None)
+
+            decision = self.user_decisions.pop(track_id, {"action": "skip"})
+            action = decision.get("action")
+
+            if action == "skip":
+                logger.info(f"User skipped track '{track.title}'")
+                track_state.status = TrackStatus.SKIPPED
+                return
+            elif action == "custom_search":
+                custom_query = decision.get("custom_query")
+                logger.info(f"User requested custom re-search for '{track.title}': '{custom_query}'")
+                track_state.status = TrackStatus.SEARCHING
+                continue
+            elif action == "confirm":
+                cand_id = decision.get("candidate_id")
+                chosen_candidate = next((c for c in track_state.candidates if c.id == cand_id), top_candidate)
+                if chosen_candidate:
+                    # Non-blocking enqueue!
+                    self.download_queue.enqueue_download(self.current_job, track_state, chosen_candidate)
+                else:
+                    track_state.status = TrackStatus.ERROR
+                    track_state.error_message = "No valid candidate chosen"
+                # Immediately advance to next track without waiting for file download!
+                return
+            elif action == "retry":
+                track_state.status = TrackStatus.SEARCHING
+                continue
+
+
+orchestrator = DownloadOrchestrator()
+spotify_service = SpotifyService()
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    logger.info("Initializing Spotify to Muzpa Backend Service...")
+    
+    async def auto_open_browser():
+        await asyncio.sleep(1.0)
+        if not settings.HEADLESS:
+            try:
+                logger.info("Automatically opening browser with Muzpa & Dashboard tabs...")
+                await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=True)
+            except Exception as e:
+                logger.warning(f"Browser auto-open background notice: {e}")
+
+    asyncio.create_task(auto_open_browser())
+    yield
+    logger.info("Shutting down services and browser context...")
+    orchestrator.download_queue.stop()
+    await orchestrator.crawler.close()
+
+
+app = FastAPI(
+    title="Spotify to Muzpa Downloader Studio",
+    version="2.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        if orchestrator.current_job:
+            await websocket.send_json({"type": "initial_state", "data": orchestrator.current_job.model_dump()})
+        await websocket.send_json({"type": "log_history", "data": log_handler.log_history})
+        
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
+@app.get("/api/browser/list")
+async def get_browser_list():
+    """Returns detected web browsers on the system."""
+    browsers = detect_available_browsers()
+    return {"current": settings.BROWSER_NAME, "browsers": browsers}
+
+
+@app.get("/api/muzpa/credentials")
+async def get_muzpa_credentials():
+    """Returns whether Muzpa credentials are configured."""
+    return {
+        "configured": bool(settings.MUZPA_EMAIL and settings.MUZPA_PASSWORD),
+        "email": settings.MUZPA_EMAIL or ""
+    }
+
+
+@app.post("/api/muzpa/credentials")
+async def save_muzpa_credentials(payload: Dict[str, Any]):
+    """Saves Muzpa username and password in settings and .env."""
+    email = payload.get("email", "").strip()
+    password = payload.get("password", "").strip()
+    auto_submit = payload.get("auto_submit", False)
+
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Both email/username and password are required.")
+
+    settings.MUZPA_EMAIL = email
+    settings.MUZPA_PASSWORD = password
+
+    # Update .env file
+    env_file = settings.BASE_DIR / ".env"
+    if env_file.exists():
+        content = env_file.read_text(encoding="utf-8")
+        if "MUZPA_EMAIL=" in content:
+            content = re.sub(r'MUZPA_EMAIL=.*', f'MUZPA_EMAIL="{email}"', content)
+        else:
+            content += f'\nMUZPA_EMAIL="{email}"'
+
+        if "MUZPA_PASSWORD=" in content:
+            content = re.sub(r'MUZPA_PASSWORD=.*', f'MUZPA_PASSWORD="{password}"', content)
+        else:
+            content += f'\nMUZPA_PASSWORD="{password}"'
+        env_file.write_text(content, encoding="utf-8")
+
+    # Trigger immediate auto-fill on active page
+    try:
+        await orchestrator.crawler.autofill_login_form(email=email, password=password, submit=auto_submit)
+    except Exception as e:
+        logger.debug(f"Auto-fill on credential save notice: {e}")
+
+    return {"status": "saved", "email": email}
+
+
+@app.post("/api/muzpa/autofill")
+async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
+    """Triggers auto-fill on Muzpa tab and brings it to front."""
+    payload = payload or {}
+    submit = payload.get("submit", False)
+    focus = payload.get("focus", True)
+
+    success = await orchestrator.crawler.autofill_login_form(submit=submit)
+    if focus:
+        await orchestrator.crawler.bring_muzpa_to_front()
+
+    return {"status": "success" if success else "form_not_found"}
+
+
+@app.post("/api/playlist/load")
+async def load_playlist(payload: Dict[str, Any]):
+    """Loads tracks from Spotify URL, initializes or restores job."""
+    url = payload.get("playlist_url")
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'playlist_url' in request.")
+
+    auto_mode = payload.get("auto_mode", settings.AUTO_MODE)
+    threshold = payload.get("similarity_threshold", settings.SIMILARITY_THRESHOLD)
+
+    try:
+        playlist_id = spotify_service.extract_playlist_id(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    existing_job = StateManager.load_job(playlist_id)
+    if existing_job:
+        logger.info(f"Loaded existing session for playlist: '{existing_job.playlist_name}'")
+        job = existing_job
+        job.auto_mode = auto_mode
+        job.similarity_threshold = threshold
+    else:
+        try:
+            name, img, tracks = spotify_service.fetch_playlist(url)
+            track_states = [TrackState(spotify_track=t) for t in tracks]
+            job = PlaylistJob(
+                playlist_id=playlist_id,
+                playlist_name=name,
+                playlist_url=url,
+                playlist_image=img,
+                tracks=track_states,
+                auto_mode=auto_mode,
+                similarity_threshold=threshold
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch Spotify playlist: {e}")
+            raise HTTPException(status_code=500, detail=f"Spotify extraction failed: {e}")
+
+    await orchestrator.start_job(job)
+    return {"status": "success", "job": job.model_dump()}
+
+
+@app.get("/api/state")
+async def get_state():
+    """Returns current active job state and download queue info."""
+    if orchestrator.current_job:
+        return {
+            "active": True,
+            "job": orchestrator.current_job.model_dump(),
+            "stats": orchestrator.current_job.stats,
+            "queue_summary": orchestrator.download_queue.get_status_summary(orchestrator.current_job)
+        }
+    return {"active": False, "job": None}
+
+
+@app.post("/api/playlist/reset")
+async def reset_playlist(payload: Dict[str, Any] = None):
+    """Resets playlist tracks back to PENDING and restarts the review loop."""
+    scope = (payload or {}).get("scope", "all")
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist job to reset.")
+
+    logger.info(f"Resetting playlist job (scope: '{scope}')...")
+
+    if scope == "all":
+        for t in orchestrator.current_job.tracks:
+            t.status = TrackStatus.PENDING
+            t.candidates = []
+            t.selected_candidate = None
+            t.error_message = None
+            t.downloaded_file_path = None
+        orchestrator.current_job.current_track_index = 0
+    elif scope == "failed":
+        for t in orchestrator.current_job.tracks:
+            if t.status in [TrackStatus.ERROR, TrackStatus.NOT_FOUND, TrackStatus.SKIPPED]:
+                t.status = TrackStatus.PENDING
+                t.error_message = None
+                t.candidates = []
+    elif scope == "downloads":
+        for t in orchestrator.current_job.tracks:
+            if t.status in [TrackStatus.COMPLETED, TrackStatus.DOWNLOADING]:
+                t.status = TrackStatus.PENDING
+                t.downloaded_file_path = None
+
+    StateManager.save_job(orchestrator.current_job)
+    await manager.broadcast({"type": "state_updated", "data": orchestrator.current_job.model_dump()})
+
+    # Restart orchestrator loop
+    if orchestrator._worker_task and not orchestrator._worker_task.done():
+        orchestrator._worker_task.cancel()
+    orchestrator._worker_task = asyncio.create_task(orchestrator._run_orchestrator_loop())
+
+    return {"status": "reset", "scope": scope}
+
+
+@app.post("/api/track/reset")
+async def reset_single_track(payload: Dict[str, Any]):
+    """Resets a single track and immediately begins searching it."""
+    track_id = payload.get("track_id")
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist job.")
+
+    idx = next((i for i, t in enumerate(orchestrator.current_job.tracks) if t.spotify_track.id == track_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Track not found in current playlist.")
+
+    t = orchestrator.current_job.tracks[idx]
+    t.status = TrackStatus.PENDING
+    t.candidates = []
+    t.selected_candidate = None
+    t.error_message = None
+    t.downloaded_file_path = None
+    orchestrator.current_job.current_track_index = idx
+
+    StateManager.save_job(orchestrator.current_job)
+    await manager.broadcast({"type": "state_updated", "data": orchestrator.current_job.model_dump()})
+
+    if orchestrator._worker_task and not orchestrator._worker_task.done():
+        orchestrator._worker_task.cancel()
+    orchestrator._worker_task = asyncio.create_task(orchestrator._run_orchestrator_loop())
+
+    return {"status": "track_reset", "track_id": track_id}
+
+
+@app.post("/api/track/decide")
+async def decide_track(decision: DecisionRequest):
+    """Submits user decision for a track."""
+    orchestrator.provide_decision(
+        track_id=decision.track_id,
+        action=decision.action,
+        candidate_id=decision.candidate_id,
+        custom_query=decision.custom_query
+    )
+    return {"status": "decision_received", "track_id": decision.track_id}
+
+
+@app.post("/api/track/jump")
+async def jump_to_track(payload: Dict[str, Any]):
+    """Allows user to jump immediately to searching a specific track."""
+    track_id = payload.get("track_id")
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist job.")
+
+    target_idx = next((i for i, t in enumerate(orchestrator.current_job.tracks) if t.spotify_track.id == track_id), None)
+    if target_idx is None:
+        raise HTTPException(status_code=404, detail="Track not found in current job.")
+
+    orchestrator.current_job.tracks[target_idx].status = TrackStatus.PENDING
+    orchestrator.current_job.current_track_index = target_idx
+    
+    if orchestrator._worker_task and not orchestrator._worker_task.done():
+        orchestrator._worker_task.cancel()
+    
+    orchestrator._worker_task = asyncio.create_task(orchestrator._run_orchestrator_loop())
+    return {"status": "jumped", "track_index": target_idx}
+
+
+@app.post("/api/browser/focus")
+async def focus_browser_tab(payload: Dict[str, Any]):
+    """Focuses Muzpa or Dashboard tab in the Chromium browser window."""
+    target = payload.get("target", "muzpa")
+    if target == "muzpa":
+        await orchestrator.crawler.bring_muzpa_to_front()
+    else:
+        await orchestrator.crawler.bring_dashboard_to_front()
+    return {"status": "focused", "target": target}
+
+
+@app.post("/api/orchestrator/pause")
+async def pause_orchestrator():
+    await orchestrator.pause()
+    return {"status": "paused"}
+
+
+@app.post("/api/orchestrator/resume")
+async def resume_orchestrator():
+    await orchestrator.resume()
+    return {"status": "resumed"}
+
+
+@app.post("/api/config")
+async def update_config(req: ConfigUpdateRequest):
+    if orchestrator.current_job:
+        if req.auto_mode is not None:
+            orchestrator.current_job.auto_mode = req.auto_mode
+        if req.similarity_threshold is not None:
+            orchestrator.current_job.similarity_threshold = req.similarity_threshold
+        StateManager.save_job(orchestrator.current_job)
+        await manager.broadcast({"type": "config_updated", "data": orchestrator.current_job.model_dump()})
+    return {"status": "updated"}
+
+
+# Mount static frontend
+static_dir = Path(__file__).resolve().parent / "static"
+static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/")
+async def serve_index():
+    index_file = static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return HTMLResponse("<h1>Spotify to Muzpa Studio Dashboard</h1><p>index.html not found.</p>")
+
+
+if __name__ == "__main__":
+    uvicorn.run("server:app", host="127.0.0.1", port=8000, log_level="info")

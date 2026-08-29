@@ -1,0 +1,42 @@
+# Environment & Secrets
+.env
+.env.local
+*.env
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+.cache
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+.pytest_cache/
+
+# Playwright & Browser Sessions
+user_data_profile/
+.playwright/
+
+# Build & Desktop Packaging
+build/
+dist/
+*.spec
+.pyinstaller_cache/
+*.dmg
+*.app
+*.exe
+*.pkg
+
+# Dynamic Application State
+state/*.json
+!state/.gitkeep
+
+# macOS & System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db

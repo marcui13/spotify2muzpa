@@ -1,0 +1,111 @@
+"""
+Spotify to Muzpa Studio - Desktop Application Launcher.
+Wraps the FastAPI server and Web Dashboard into a native desktop window (macOS Cocoa / Windows WebView).
+"""
+
+import sys
+import time
+import socket
+import logging
+import threading
+import uvicorn
+from pathlib import Path
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("desktop_app")
+
+
+def find_free_port(preferred_port: int = 8000) -> int:
+    """Finds an available local port, prioritizing preferred_port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("127.0.0.1", preferred_port)) != 0:
+            return preferred_port
+    
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+        return port
+
+
+def start_server_thread(host: str, port: int):
+    """Starts Uvicorn FastAPI server in a dedicated background daemon thread."""
+    from server import app
+    config = uvicorn.Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+        access_log=False
+    )
+    server = uvicorn.Server(config)
+    server.run()
+
+
+def wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
+    """Waits until the local server accepts TCP connections."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except (OSError, ConnectionRefusedError):
+            time.sleep(0.2)
+    return False
+
+
+def main():
+    """Main desktop application entrypoint."""
+    host = "127.0.0.1"
+    port = find_free_port(8000)
+    app_url = f"http://{host}:{port}"
+
+    logger.info(f"Starting Spotify to Muzpa Studio Desktop on {app_url}...")
+
+    # Start FastAPI server in background thread
+    server_thread = threading.Thread(
+        target=start_server_thread,
+        args=(host, port),
+        daemon=True,
+        name="FastAPIServerThread"
+    )
+    server_thread.start()
+
+    if not wait_for_server(host, port, timeout=8.0):
+        logger.error("Failed to start local background server in time.")
+        sys.exit(1)
+
+    logger.info("Background server ready. Launching desktop window...")
+
+    try:
+        import webview
+        # Create native desktop window
+        window = webview.create_window(
+            title="Spotify to Muzpa Studio",
+            url=app_url,
+            width=1280,
+            height=850,
+            min_size=(1050, 700),
+            background_color="#121212",
+            text_select=True,
+            confirm_close=False
+        )
+        webview.start(debug=False)
+    except ImportError:
+        logger.warning("pywebview is not installed. Falling back to default system browser.")
+        import webbrowser
+        webbrowser.open(app_url)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
+    except Exception as e:
+        logger.error(f"Error initializing desktop GUI window: {e}")
+        import webbrowser
+        webbrowser.open(app_url)
+
+
+if __name__ == "__main__":
+    main()

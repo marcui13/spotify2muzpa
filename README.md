@@ -1,234 +1,295 @@
-# Spotify to Muzpa Playlist Downloader
+# 🎵 Spotify to Muzpa Studio (v2.0)
 
-A personal tool that takes a Spotify playlist, searches for each track on
-[Muzpa](https://muzpa.com), and lets you review, confirm, and download
-matches — with searches automated and downloads queued in the background,
-while you stay in control of every match.
+> **Plataforma de Alta Fidelidad para Migración de Metadatos, Búsqueda Inteligente y Descarga de Audio para DJs, Productores y Coleccionistas.**
 
-> Built for personal use (finding DJ set tracks). Automating searches and
-> downloads on a third-party site can interact with its Terms of Service —
-> review Muzpa's ToS before relying on this for regular use, and treat this
-> as a personal productivity tool rather than something to run unattended
-> at scale.
+[![Python Version](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Framework](https://img.shields.io/badge/FastAPI-Modern%20Async-009688.svg)](https://fastapi.tiangolo.com/)
+[![Automation](https://img.shields.io/badge/Playwright-Chromium%20Native-2EAD33.svg)](https://playwright.dev/)
+[![Scoring](https://img.shields.io/badge/FuzzyMatch-RapidFuzz-orange.svg)](https://github.com/maxbachmann/RapidFuzz)
+[![ID3 Tagging](https://img.shields.io/badge/Metadata-Mutagen%20EasyID3-red.svg)](https://mutagen.readthedocs.io/)
+[![Desktop Ready](https://img.shields.io/badge/Desktop-macOS%20%7C%20Windows-lightgrey.svg)](#-empaquetado-y-distribución-desktop)
 
 ---
 
-## What it does
-
-1. **Reads a Spotify playlist** directly from its URL (via the Spotify Web
-   API), no manual export needed.
-2. **Searches Muzpa automatically** for each track, using a Chrome window
-   controlled by Playwright that's logged into your Muzpa account.
-3. **Shows you the matches** in a local web UI, with the closest match to
-   the Spotify track highlighted (using fuzzy string matching).
-4. **You confirm or skip** each track. Nothing downloads without your
-   explicit click.
-5. **Downloads run in a background queue** (a few in parallel), so
-   confirming a track doesn't block you from reviewing the next one.
-6. **Files are saved** to `<output-dir>/<playlist name>/Artist - Track.mp3`.
-7. **Click any track** in the list at any time to jump straight to
-   searching it — in order, out of order, or to re-search one you already
-   handled.
+## 📌 Tabla de Contenidos
+1. [Visión General y Solución al Problema Histórico (HTTP 400)](#-visión-general-y-solución-al-problema-histórico-http-400)
+2. [Arquitectura del Sistema](#-arquitectura-del-sistema)
+3. [Características Principales](#-características-principales)
+4. [Librerías y Dependencias de Python Utilizadas](#-librerías-y-dependencias-de-python-utilizadas)
+5. [Instalación y Configuración](#-instalación-y-configuración)
+6. [Guía de Uso](#-guía-de-uso)
+   - [Modo 1: Aplicación de Escritorio Nativa (Desktop App)](#modo-1-aplicación-de-escritorio-nativa-desktop-app)
+   - [Modo 2: Dashboard Web en Tiempo Real](#modo-2-dashboard-web-en-tiempo-real)
+   - [Modo 3: Modo Consola CLI](#modo-3-modo-consola-cli)
+7. [Empaquetado y Distribución Desktop (.app / .dmg / .exe)](#-empaquetado-y-distribución-desktop)
+8. [Manejo de Errores y Resiliencia](#-manejo-de-errores-y-resiliencia)
+9. [Términos y Condiciones de Uso](#-términos-y-condiciones-de-uso)
+10. [Política de Privacidad y Descargo de Responsabilidad Legal](#-política-de-privacidad-y-descargo-de-responsabilidad-legal)
+11. [Estructura del Proyecto](#-estructura-del-proyecto)
 
 ---
 
-## Architecture
+## 🔍 Visión General y Solución al Problema Histórico (HTTP 400)
+
+### El Problema Anterior
+En implementaciones tradicionales de scraping para plataformas SPA como Muzpa, existía una desconexión crítica entre la capa de automatización de navegador y la descarga de archivos:
+- **Pérdida de Cookies y Tokens Efímeros:** El scraping se ejecutaba con Chromium, pero las descargas se delegaban a librerías como `requests.get()`. Muzpa genera tokens únicos y cabeceras dinámicas en cada interacción DOM.
+- **Error HTTP 400 (Bad Request):** Los servidores de streaming rechazaban solicitudes que no incluían la huella TLS, tokens de sesión actualizados (`localStorage`) ni las cabeceras `Referer`/`Origin` auténticas.
+
+### La Solución Implementada en la v2.0
+- **Captura Nativa Playwright (`page.expect_download()`):** Las descargas se gestionan dentro del propio contexto de navegador autenticado. Al hacer clic o despachar eventos nativos, se transmiten todas las cookies de sesión, tokens y cabeceras sin interrupciones ni desincronización.
+- **Cola Asíncrona No Bloqueante (`DownloadQueueManager`):** Cuando confirmas una canción, esta entra de inmediato a una cola en segundo plano con workers concurrentes. La interfaz continúa inmediatamente con la búsqueda de la siguiente canción.
+- **Auto-Relleno Reactivo de Login:** Detección de campos de login y disparo de eventos reactivos (`input`, `change`) para AngularJS (`ng-model`), permitiendo iniciar sesión automáticamente o guardar credenciales de forma segura.
+
+---
+
+## 🏛 Arquitectura del Sistema
 
 ```
-┌─────────────────┐        ┌───────────────────────────────┐
-│  spotify_client  │──────▶│           app.py                │
-│  (Spotify API)   │        │                                 │
-└─────────────────┘        │  ┌───────────────────────────┐  │
-                            │  │  Flask (main thread)       │  │
-                            │  │  - serves the web UI       │  │
-                            │  │  - /api/state, /start,      │  │
-                            │  │    /decide, /search-track  │  │
-                            │  └──────────────┬─────────────┘  │
-                            │                 │ shared state    │
-                            │                 │ (dict + locks)  │
-                            │  ┌──────────────▼─────────────┐  │
-                            │  │  worker_loop (bg thread)    │  │
-                            │  │  - owns the Playwright       │  │
-                            │  │    browser session          │  │
-                            │  │  - searches Muzpa per track  │  │
-                            │  │  - waits for your decision   │  │
-                            │  └──────────────┬─────────────┘  │
-                            │                 │ enqueues        │
-                            │  ┌──────────────▼─────────────┐  │
-                            │  │  download_worker × N        │  │
-                            │  │  (bg threads, plain HTTP     │  │
-                            │  │  via requests + session      │  │
-                            │  │  cookies — never touch       │  │
-                            │  │  Playwright)                 │  │
-                            │  └───────────────────────────┘  │
-                            └───────────────────────────────┘
+┌─────────────────────────┐          ┌──────────────────────────────────────────────┐
+│  Spotify Web API        │ ───────▶ │              SpotifyService                  │
+│  (Client Credentials)   │          │   (Paginación automática de 100 en 100)      │
+└─────────────────────────┘          └──────────────────────┬───────────────────────┘
+                                                            │
+                                             ┌──────────────▼──────────────┐
+                                             │     DownloadOrchestrator    │
+                                             │  (Coordina Búsqueda y Cola) │
+                                             └──────────────┬──────────────┘
+                                                            │
+                                   ┌────────────────────────┴────────────────────────┐
+                                   │                                                 │
+                      ┌────────────▼────────────┐                       ┌────────────▼────────────┐
+                      │    MuzpaCrawlerEngine   │                       │   DownloadQueueManager  │
+                      │ (Playwright Chromium +  │                       │ (Workers en Background  │
+                      │   Fuzzy Match Ranker)   │                       │  + Mutagen ID3 Tagger)  │
+                      └─────────────────────────┘                       └─────────────────────────┘
+                                   │                                                 │
+                                   └────────────────────────┬────────────────────────┘
+                                                            │
+                                             ┌──────────────▼──────────────┐
+                                             │   FastAPI + WebSockets      │
+                                             │  (Desktop UI / Web Studio)  │
+                                             └─────────────────────────────┘
 ```
-
-**Why downloads don't use Playwright directly:** Playwright's sync API is
-not thread-safe — only the thread that created the browser session is
-allowed to call it. Calling it from other threads raises `Cannot switch to
-a different thread`. So `app.py` captures the session cookies **once**
-after login, and hands them to plain `requests`-based worker threads that
-never touch Playwright again. This is also what makes the download queue
-non-blocking: confirming a track just enqueues a job and moves on.
-
-**Why searches still use Playwright:** Muzpa's search results are rendered
-client-side (it's an AngularJS single-page app), so a plain HTTP request
-wouldn't return the same HTML a logged-in browser sees. Playwright renders
-the page and lets us read the real DOM.
 
 ---
 
-## Setup
+## ✨ Características Principales
 
-### 1. Install dependencies
+- 🔐 **Auto-relleno y Gestión de Credenciales Muzpa:** Configuración en `.env` o desde el modal web (*Muzpa Login*). Auto-rellena credenciales emitiendo eventos DOM nativos para sincronizar el estado reactivo de AngularJS.
+- ⚡ **Cola de Descargas Asíncrona No Bloqueante:** Al confirmar un track, pasa inmediatamente a la cola de descargas en segundo plano mientras el buscador pasa a la siguiente canción al instante.
+- 📊 **Tracker de Descargas en Vivo (Live Download Widget):** Widget visual interactivo con animaciones de spinner, tiempo transcurrido, estado de descargas activas y contador de tracks guardados.
+- 🔄 **Controles de Reset Flexibles:** Botón *Reset All* para re-procesar toda la playlist, botón *Retry Failed* para canciones con error, y botón `↺` para reiniciar cualquier pista puntual.
+- 🌐 **Selector Interactivo de Navegadores:** Compatible con **Google Chrome**, **Brave Browser**, **Microsoft Edge** y **Chromium empaquetado**.
+- 📁 **Organización Automática:** Guarda los archivos en `~/Downloads/<Nombre de la Playlist>/<Artista> - <Título>.mp3`.
+- 🧠 **Motor de Coincidencia Difusa (`RapidFuzz`):** Scoring ponderado (Título 40%, Artista 30%, Combinado 30%) con bonificación/penalización por desvío de duración en segundos.
+- 🏷 **Etiquetado ID3 Oficial:** Escribe metadatos de Título, Artista y Álbum directamente en el MP3 descargado (`mutagen.easyid3`).
+- 💾 **Persistencia y Recuperación de Sesión:** Guarda el progreso en `state/job_<id>.json` para reanudar sin perder descargas previas.
 
+---
+
+## 📦 Librerías y Dependencias de Python Utilizadas
+
+El sistema fue construido utilizando una selección de librerías modernas de alto rendimiento en el ecosistema Python:
+
+### 1. Automatización Web, Scraping y Captura de Red
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`playwright`** | `^1.40.0` | **Motor principal de automatización y scraping.** Controla instancias reales de Chromium, gestiona perfiles persistentes (`user_data_profile`), sortea desafíos SPA de AngularJS, auto-rellena formularios emitiendo eventos DOM (`input`, `change`) y captura descargas de audio autenticadas mediante `page.expect_download()`. |
+
+### 2. Backend Asíncrono, API REST y Comunicación en Tiempo Real
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`fastapi`** | `^0.100.0` | **Framework web backend.** Proporciona los endpoints REST para control de jobs, decisiones manuales, endpoints de reset, gestión de credenciales y orquestación del ciclo de vida (`lifespan`). |
+| **`uvicorn[standard]`** | `^0.22.0` | **Servidor ASGI asíncrono de alto rendimiento.** Ejecuta la aplicación FastAPI con aceleración de `uvloop` y `httptools`. |
+| **`websockets`** | `^12.0` | **Canal de streaming bidireccional.** Transmite en tiempo real el log de ejecución estructurado, cambios de estado de canciones y métricas de la cola de descargas directamente al frontend. |
+| **`aiofiles`** | `^23.0.0` | **I/O asíncrono de archivos.** Permite lectura y escritura no bloqueante de archivos estáticos y persistencia de estado JSON. |
+
+### 3. Integración con APIs y Extracción de Metadatos
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`spotipy`** | `^2.23.0` | **Cliente oficial de la API de Spotify.** Implementa el flujo *Client Credentials*, extrae metadatos oficiales (título, artista, álbum, duración, carátulas) y gestiona paginación automática de 100 en 100 tracks. |
+| **`requests`** / **`httpx`** | `^2.31.0` / `^0.25.0` | **Clientes HTTP sincrónicos y asíncronos.** Empleados en el motor de respaldo (*fallback parser*) para extraer playlists públicas directamente desde endpoints embebidos sin depender de tokens. |
+
+### 4. Algoritmos de Búsqueda y Procesamiento de Audio
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`rapidfuzz`** | `^3.0.0` | **Motor de coincidencia difusa (Fuzzy Matching) en C++.** Calcula similitud con `token_set_ratio` y `token_sort_ratio` ponderando título, artista y variaciones de nombres para clasificar los mejores resultados de Muzpa. |
+| **`mutagen`** | `^1.47.0` | **Manipulación y etiquetado de metadatos de audio.** Inyecta etiquetas oficiales ID3v2.3/ID3v2.4 (`EasyID3`, `MP3`) en los archivos `.mp3` descargados para que los reproductores y software de DJ (Traktor, Rekordbox, VirtualDJ) los reconozcan inmediatamente. |
+
+### 5. Validación de Datos, Configuración y CLI
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`pydantic`** & **`pydantic-settings`** | `^2.0.0` | **Modelado de dominio y validación estricta.** Define contratos de datos tipados (`SpotifyTrack`, `MuzpaCandidate`, `TrackState`, `PlaylistJob`) y centraliza la configuración desde variables de entorno. |
+| **`python-dotenv`** | `^1.0.0` | **Carga de variables de entorno.** Lee archivos `.env` locales de forma segura. |
+| **`rich`** | `^13.0.0` | **Interfaz visual en terminal.** Renderizado de tablas, paneles de progreso, colores y menús interactivos de selección de navegador en modo consola. |
+
+### 6. Aplicación de Escritorio y Empaquetado Autónomo
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`pywebview`** | `^5.0.0` | **Wrapper de interfaz gráfica nativa.** Crea ventanas de escritorio Cocoa (macOS WebKit) o WebView2 (Windows) para ejecutar la suite como aplicación de escritorio independiente. |
+| **`pyinstaller`** | `^6.0.0` | **Empaquetador y generador de binarios.** Compila el código fuente en bundles autónomos (`.app` y `.dmg` para macOS, `.exe` para Windows). |
+
+### 7. Pruebas Unitarias y Aseguramiento de Calidad
+| Librería | Versión | Rol en el Proyecto |
+| :--- | :--- | :--- |
+| **`pytest`** & **`pytest-asyncio`** | `^7.4.0` / `^0.21.0` | **Suite de testing automatizado.** Ejecución de pruebas unitarias sobre extracción de Spotify, algoritmo fuzzy, sanitización de archivos, cola asíncrona y endpoints REST. |
+
+---
+
+## 🚀 Instalación y Configuración
+
+### 1. Requisitos del Sistema
+- Python 3.9 o superior.
+- Credenciales gratuitas de la API de Spotify ([Spotify Developer Dashboard](https://developer.spotify.com/dashboard)).
+
+### 2. Clonar el Repositorio
 ```bash
-python3 -m pip install flask playwright rapidfuzz requests spotipy --break-system-packages
-python3 -m playwright install chromium
+git clone https://github.com/tu-usuario/spotify2muzpa.git
+cd spotify2muzpa
 ```
 
-### 2. Create a Spotify app (free, one-time)
-
-1. Go to <https://developer.spotify.com/dashboard> and log in.
-2. **Create app** → any name/description.
-3. Redirect URI: `http://127.0.0.1:8888/callback`
-4. Save, then copy the **Client ID** and **Client Secret**.
-
-### 3. Set environment variables
-
+### 3. Crear Entorno Virtual e Instalar Dependencias
 ```bash
-export SPOTIFY_CLIENT_ID="your_client_id"
-export SPOTIFY_CLIENT_SECRET="your_client_secret"
-
-# Optional — enables automatic Muzpa login attempts (see below)
-export MUZPA_EMAIL="you@example.com"
-export MUZPA_PASSWORD="your_password"
+python3 -m venv .venv
+source .venv/bin/activate  # En Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium
 ```
 
-Never hardcode these in a file or paste them in chat/commits. If a secret
-is ever exposed, rotate it (Spotify: regenerate the Client Secret in the
-dashboard; Muzpa: change your password).
-
----
-
-## Usage
-
-### Single command (recommended)
-
+### 4. Configurar Variables de Entorno (`.env`)
 ```bash
-python3 app.py --playlist-url "https://open.spotify.com/playlist/XXXXXXXXXXXX"
+cp .env.example .env
 ```
 
-Then open <http://localhost:5000>.
+Edita `.env` con tus claves:
+```ini
+# Credenciales oficiales de Spotify API
+SPOTIFY_CLIENT_ID="tu_client_id_aqui"
+SPOTIFY_CLIENT_SECRET="tu_client_secret_aqui"
 
-### Legacy: from a CSV
+# Opcional: Credenciales de cuenta en Muzpa para auto-login
+MUZPA_EMAIL="tu_email@ejemplo.com"
+MUZPA_PASSWORD="tu_password"
 
-If you'd rather generate a CSV first (e.g., to review the track list
-offline before running the full tool):
+# Configuración de ejecución
+AUTO_MODE=false
+SIMILARITY_THRESHOLD=75.0
+HEADLESS=false
+```
 
+---
+
+## 💻 Guía de Uso
+
+### Modo 1: Aplicación de Escritorio Nativa (Desktop App)
+Inicia la aplicación en una ventana nativa de escritorio independiente:
 ```bash
-python3 spotify_to_muzpa.py "https://open.spotify.com/playlist/XXXXXXXXXXXX"
-python3 app.py --csv "output/my_playlist.csv" --playlist-name "my_playlist"
+python desktop.py
+```
+Se abrirá una ventana de escritorio con tema oscuro integrada con macOS Cocoa o Windows WebView.
+
+---
+
+### Modo 2: Dashboard Web en Tiempo Real
+Inicia el servidor local y accede desde cualquier navegador:
+```bash
+python run.py --server
+```
+1. Ingresa a `http://localhost:8000`.
+2. Pega la URL de cualquier playlist de Spotify (pública o privada) y presiona **"Load Playlist"**.
+3. Revisa y confirma coincidencias o activa el interruptor **Auto Mode** para procesar automáticamente las canciones que superen el porcentaje de similitud configurado.
+
+---
+
+### Modo 3: Modo Consola CLI
+Para entornos sin interfaz gráfica o automatizaciones por script:
+```bash
+# Modo interactivo en terminal:
+python run.py --playlist-url "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+
+# Modo 100% automático:
+python run.py --playlist-url "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" --auto --threshold 80
 ```
 
-### First run: logging in to Muzpa
+---
 
-A Chrome window controlled by the script opens automatically, pointed at
-Muzpa.
+## 📦 Empaquetado y Distribución Desktop
 
-- If `MUZPA_EMAIL` / `MUZPA_PASSWORD` are set, the script makes a
-  **best-effort automatic login attempt** using common form selectors.
-  This wasn't verified against Muzpa's real login form, so it may not
-  work — if the window still shows a login form after a couple of
-  seconds, just **log in by hand once**.
-- Either way, once you're logged in, the session is saved in
-  `./browser_profile` and reused on future runs — you won't need to log
-  in again unless that folder is deleted or the session expires.
+Para generar ejecutables autónomos de un solo clic que no requieran que el usuario instale Python ni dependencias manuales:
 
-### Using the app
+### Compilar para macOS (`.app` y `.dmg`)
+Ejecuta el script de empaquetado automatizado:
+```bash
+python build_desktop.py
+```
+- **Resultado:** Encontrarás el paquete `dist/Spotify2MuzpaStudio.app` y la imagen instaladora `dist/Spotify2MuzpaStudio-macOS.dmg`.
 
-- Click **Start**. The tool searches the first pending track and shows
-  matches on the right, best match highlighted.
-- Click **Download** on the match you want, or **Skip** to move on.
-  Confirming doesn't wait for the file to finish downloading — you're
-  immediately taken to the next track while the download runs in the
-  background (watch the status badges update live).
-- Click **any track** in the left-hand list to jump straight to searching
-  it, at any time — including tracks that are already downloaded or
-  skipped, if you want to re-check or replace them.
-- Errors (no results found, failed downloads) show up as toast
-  notifications in the bottom-right corner.
-
-Files are saved to `~/Muzpa Downloads/<playlist name>/Artist - Track.mp3`
-by default (change with `--output-dir`).
+### Compilar para Windows (`.exe`)
+En una máquina con Windows:
+```cmd
+python build_desktop.py
+```
+- **Resultado:** Encontrarás el ejecutable `dist\Spotify2MuzpaStudio\Spotify2MuzpaStudio.exe`.
 
 ---
 
-## Known limitations
+## 🛠 Manejo de Errores y Resiliencia
 
-- **Muzpa's markup is hardcoded.** The search-result and download-button
-  selectors (`ms-release-track`, `a.ms-release-dwnldbtn`, etc.) were
-  captured from a real page inspection at one point in time. If Muzpa
-  changes its frontend, `extract_candidates()` in `app.py` will need
-  updated selectors.
-- **The login form selectors are guesses.** They weren't taken from a real
-  inspection of Muzpa's login page. Manual login always works as a
-  fallback.
-- **No persistence between runs yet.** If you close the app mid-playlist,
-  re-running with the same playlist starts the review from scratch (though
-  already-downloaded files won't be re-downloaded unless you click them
-  again). See Roadmap below.
-- **Single Muzpa account, single machine.** This was built for personal
-  use, not designed for multiple concurrent users.
+- **Reintentos Inteligentes:** Las descargas cuentan con reintentos exponenciales configurables (`MAX_RETRIES=3`).
+- **Paginación Robusta:** Procesa listas de 500+ pistas solicitando lotes de 100 elementos sin saturar la cuota de la API.
+- **Sanitización de Nombres de Archivo:** Limpieza estricta de caracteres incompatibles con el sistema de archivos (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`).
+- **Tolerancia a Fallos y Reanudación:** Si el proceso se detiene, al recargar la misma playlist se recupera el progreso exacto desde el archivo local `state/`.
 
 ---
 
-## Architecture review / potential improvements
+## 📜 Términos y Condiciones de Uso
 
-A few things worth considering if this keeps growing:
+Al utilizar este software (**"Spotify to Muzpa Studio"**), aceptas expresamente los siguientes términos:
 
-- **Persist state to disk** (e.g., a JSON file per playlist) so you can
-  close the app mid-playlist and resume later without losing progress or
-  re-reviewing already-decided tracks.
-- **Retry logic for failed downloads** — right now a failed download just
-  sits at `error`; clicking the track again re-searches it, but a
-  dedicated "Retry download" action (re-using the same candidate href
-  without a new search) would be faster.
-- **Rate limiting / pacing** between searches to be gentler on Muzpa and
-  reduce the chance of triggering anti-bot measures — right now searches
-  fire as fast as you click.
-- **Config file** instead of only env vars + CLI flags, for people who
-  don't want to export variables every session (with the same
-  no-hardcoded-secrets caution).
-- **Structured logging** instead of `print()` statements, to make issues
-  easier to diagnose from the terminal output.
-- **Automated tests** for the pure-logic pieces (filename sanitization,
-  fuzzy-match scoring, playlist parsing) — the Playwright/Flask glue is
-  harder to test but the logic around it isn't.
-- **Packaging** as a single installable CLI (e.g., a `pyproject.toml` +
-  entry point) instead of "clone the folder and run `app.py`", if this is
-  going to be used regularly.
-- **Multi-user support**, if this ever becomes something to share: each
-  user would need their own Spotify app credentials and their own Muzpa
-  session/profile directory, plus a clear look at Muzpa's Terms of Service
-  for automated access before enabling that.
+1. **Uso Personal y Educativo:** Esta herramienta ha sido diseñada exclusivamente con fines de investigación técnica, interoperabilidad de metadatos, desarrollo educativo y realización de copias de seguridad de audio de uso estrictamente personal.
+2. **Responsabilidad del Usuario:** El usuario final asume total y absoluta responsabilidad por el uso que haga de esta aplicación, así como por el cumplimiento de los Términos de Servicio (ToS) y directrices de las plataformas web de terceros con las que interactúe (incluyendo Spotify AB y Muzpa).
+3. **Prohibición de Uso Comercial no Autorizado:** Queda prohibida la redistribución, venta, retransmisión o explotación comercial de obras musicales protegidas por derechos de propiedad intelectual obtenidas mediante el uso de este software.
+4. **Sin Garantías (AS IS):** El software se distribuye "tal cual" (*AS IS*), sin garantías expresas ni implícitas de disponibilidad ininterrumpida, exactitud de metadatos o adecuación para un fin particular.
 
 ---
 
-## Project structure
+## 🔒 Política de Privacidad y Descargo de Responsabilidad Legal
+
+### 1. Privacidad y Seguridad Local (*Local-First Architecture*)
+- **Cero Telemetría Externa:** Este software no recopila, almacena ni transmite datos personales, hábitos de escucha, URLs de playlists ni archivos descargados a ningún servidor externo o de terceros gestionado por los desarrolladores.
+- **Credenciales Seguras en tu Máquina:** Tanto las claves de Spotify API (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`) como las credenciales de Muzpa y las cookies de sesión del navegador se guardan **100% de forma local** en tu propio equipo (`.env` y `./user_data_profile/`).
+
+### 2. Propiedad Intelectual y Marcas Registradas
+- **Spotify®:** Es una marca registrada de **Spotify AB**. Este proyecto es una herramienta independiente y **no está afiliado, respaldado, certificado ni patrocinado** de ninguna manera por Spotify AB ni por ninguna de sus subsidiarias.
+- **Muzpa:** Es una marca/plataforma independiente. Este proyecto no mantiene ninguna relación comercial ni técnica con los propietarios o administradores de dicha plataforma.
+- **Derechos de Autor (Copyright):** Los derechos patrimoniales y morales sobre las obras musicales, carátulas, fonogramas y metadatos pertenecen a sus respectivos autores, artistas, compositores y sellos discográficos. Este software no almacena ni distribuye material con copyright en servidores propios.
+
+---
+
+## 📂 Estructura del Proyecto
 
 ```
 spotify2muzpa/
-├── app.py                  # Main tool: Flask UI + Playwright + download queue
-├── spotify_client.py       # Shared Spotify API helpers
-├── spotify_to_muzpa.py     # Legacy standalone CSV/HTML export tool
-├── templates/
-│   └── index.html          # Web UI (single page, polls /api/state)
-├── browser_profile/        # Playwright's persistent Chrome profile (git-ignore this)
-└── README.md
+├── config.py             # Configuración centralizada Pydantic & variables .env
+├── models.py             # Modelos de dominio tipados (SpotifyTrack, Candidate, TrackState)
+├── spotify_service.py    # Cliente Spotify API con paginación automática y fallback
+├── muzpa_crawler.py      # Crawler Playwright, auto-login y motor de coincidencia difusa (rapidfuzz)
+├── downloader.py         # DownloadQueueManager asíncrono, Mutagen ID3 Tagger y persistencia
+├── server.py             # Servidor FastAPI, endpoints REST y WebSockets en tiempo real
+├── desktop.py            # Launcher de aplicación de escritorio nativa (PyWebView / Cocoa)
+├── build_desktop.py      # Script de empaquetado multiplataforma (.app / .dmg / .exe)
+├── run.py                # Entrypoint unificado (CLI & Servidor Web)
+├── static/
+│   └── index.html        # Dashboard Web interactivo (Tailwind, WebSockets, Dark Theme)
+├── tests/                # Suite completa de pruebas unitarias (PyTest)
+├── requirements.txt      # Dependencias del proyecto
+├── .env.example          # Plantilla de variables de entorno
+└── state/                # Almacén local de persistencia de jobs (git-ignored)
 ```
 
 ---
 
-Agustin Marquardt © 2026 · Spotify2Muzpa
+## 📄 Licencia
+
+Este proyecto está bajo la Licencia MIT. Consulta el archivo `LICENSE` para más información.
