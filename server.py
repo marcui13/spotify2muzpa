@@ -118,6 +118,10 @@ class DownloadOrchestrator:
         async with self._lock:
             self.current_job = job
             self.is_paused = False
+            for ev in list(self.decision_events.values()):
+                ev.set()
+            self.decision_events.clear()
+            self.user_decisions.clear()
             StateManager.save_job(job)
 
             if self._worker_task and not self._worker_task.done():
@@ -421,26 +425,28 @@ async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
 
 @app.post("/api/playlist/load")
 async def load_playlist(payload: Dict[str, Any]):
-    """Loads tracks from Spotify URL, initializes or restores job."""
+    """Loads tracks from Spotify URL, initializes or restores job (or forces fresh reload if force_fresh=True)."""
     url = payload.get("playlist_url")
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'playlist_url' in request.")
 
     auto_mode = payload.get("auto_mode", settings.AUTO_MODE)
     threshold = payload.get("similarity_threshold", settings.SIMILARITY_THRESHOLD)
+    force_fresh = payload.get("force_fresh", False)
 
     try:
         playlist_id = spotify_service.extract_playlist_id(url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    existing_job = StateManager.load_job(playlist_id)
+    existing_job = None if force_fresh else StateManager.load_job(playlist_id)
     if existing_job:
         logger.info(f"Loaded existing session for playlist: '{existing_job.playlist_name}'")
         job = existing_job
         job.auto_mode = auto_mode
         job.similarity_threshold = threshold
     else:
+        logger.info(f"Fetching fresh playlist from Spotify API: {url} (force_fresh={force_fresh})...")
         try:
             name, img, tracks = spotify_service.fetch_playlist(url)
             track_states = [TrackState(spotify_track=t) for t in tracks]
@@ -458,7 +464,7 @@ async def load_playlist(payload: Dict[str, Any]):
             raise HTTPException(status_code=500, detail=f"Spotify extraction failed: {e}")
 
     await orchestrator.start_job(job)
-    return {"status": "success", "job": job.model_dump()}
+    return {"status": "success", "job": job.model_dump(), "reloaded_fresh": force_fresh}
 
 
 @app.get("/api/state")

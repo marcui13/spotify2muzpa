@@ -138,8 +138,11 @@
               <input type="text" id="playlistInput" placeholder="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M..." 
                 class="w-full bg-spotify-light border border-spotify-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-spotify transition shadow-inner">
             </div>
-            <button onclick="loadPlaylist()" id="loadBtn" class="bg-spotify hover:bg-spotify-hover text-black font-bold px-5 md:px-6 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow-lg shadow-spotify/20 shrink-0">
+            <button onclick="loadPlaylist(false)" id="loadBtn" class="bg-spotify hover:bg-spotify-hover text-black font-bold px-5 md:px-6 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow-lg shadow-spotify/20 shrink-0">
               <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i> <span>Load Playlist</span>
+            </button>
+            <button onclick="loadPlaylist(true)" id="reloadFreshBtn" title="Fetch fresh playlist from Spotify API & reset all saved progress" class="bg-spotify-light hover:bg-spotify-card-hover text-cyan-300 border border-spotify-border font-bold px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow shrink-0">
+              <i class="fa-solid fa-arrows-rotate text-cyan-400" aria-hidden="true"></i> <span class="hidden sm:inline">Reload Fresh</span>
             </button>
           </div>
         </div>
@@ -164,11 +167,14 @@
             <span class="font-medium text-neutral-300">Overall Progress</span>
             <div class="flex items-center gap-3">
               <div class="flex items-center gap-1">
+                <button onclick="reloadPlaylistFresh()" title="Re-fetch fresh playlist from Spotify & reset all state" class="px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60 rounded text-[11px] font-mono flex items-center gap-1 transition">
+                  <i class="fa-solid fa-arrows-rotate text-cyan-400" aria-hidden="true"></i> Fresh Reload
+                </button>
                 <button onclick="resetPlaylist('all')" title="Reset entire playlist to start from beginning" class="px-2 py-0.5 bg-spotify-light hover:bg-spotify-card-hover text-neutral-300 border border-spotify-border rounded text-[11px] font-mono flex items-center gap-1 transition">
                   <i class="fa-solid fa-rotate-left text-neutral-400" aria-hidden="true"></i> Reset All
                 </button>
                 <button onclick="resetPlaylist('failed')" title="Retry only failed or skipped tracks" class="px-2 py-0.5 bg-spotify-light hover:bg-spotify-card-hover text-amber-300 border border-spotify-border rounded text-[11px] font-mono flex items-center gap-1 transition">
-                  <i class="fa-solid fa-arrows-rotate text-amber-400" aria-hidden="true"></i> Retry Failed
+                  <i class="fa-solid fa-rotate text-amber-400" aria-hidden="true"></i> Retry Failed
                 </button>
               </div>
               <span id="progressPercent" class="font-mono text-spotify font-bold text-sm">0%</span>
@@ -638,19 +644,27 @@
       }
     }
 
-    async function loadPlaylist() {
+    async function loadPlaylist(forceFresh = false) {
       const url = document.getElementById("playlistInput").value.trim();
       if (!url) return;
 
-      const btn = document.getElementById("loadBtn");
-      btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading...';
+      if (forceFresh) {
+        const confirmed = confirm("Are you sure you want to re-fetch this playlist from Spotify and RESET all saved progress to start completely fresh?");
+        if (!confirmed) return;
+      }
+
+      const btn = forceFresh ? document.getElementById("reloadFreshBtn") : document.getElementById("loadBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${forceFresh ? 'Re-fetching...' : 'Loading...'}`;
+      }
 
       try {
         const res = await fetch("/api/playlist/load", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ playlist_url: url })
+          body: JSON.stringify({ playlist_url: url, force_fresh: forceFresh })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -658,13 +672,22 @@
         } else {
           activeJob = data.job;
           renderJob(activeJob);
+          appendLog(forceFresh ? `✓ Fresh playlist reloaded from Spotify API (state reset).` : `✓ Playlist loaded.`, "system");
         }
       } catch (e) {
         alert("Request error: " + e.message);
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-cloud-arrow-down"></i> Load Playlist';
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
       }
+    }
+
+    async function reloadPlaylistFresh() {
+      if (!activeJob || !activeJob.playlist_url) return;
+      document.getElementById("playlistInput").value = activeJob.playlist_url;
+      await loadPlaylist(true);
     }
 
     async function confirmCandidate(candidateId) {

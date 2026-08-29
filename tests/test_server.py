@@ -96,3 +96,30 @@ def test_jump_to_track(client):
     if orchestrator._worker_task:
         orchestrator._worker_task.cancel()
     orchestrator.current_job = None
+
+
+def test_load_playlist_force_fresh(client, monkeypatch):
+    from server import spotify_service, orchestrator
+    from models import SpotifyTrack
+
+    # Mock spotify fetch
+    monkeypatch.setattr(
+        spotify_service,
+        "fetch_playlist",
+        lambda url: ("Mock Playlist", "https://img.jpg", [
+            SpotifyTrack(id="mock_t1", title="Mock Track 1", artist="Mock Artist"),
+            SpotifyTrack(id="mock_t2", title="Mock Track 2", artist="Mock Artist"),
+        ])
+    )
+
+    res = client.post("/api/playlist/load", json={"playlist_url": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M", "force_fresh": True})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["reloaded_fresh"] is True
+    assert len(data["job"]["tracks"]) == 2
+
+    # Clean up
+    if orchestrator._worker_task:
+        orchestrator._worker_task.cancel()
+    orchestrator.current_job = None
