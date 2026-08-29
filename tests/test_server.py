@@ -46,3 +46,25 @@ def test_muzpa_credentials_flow(client):
     post_res = client.post("/api/muzpa/credentials", json={"email": "test@example.com", "password": "secretpassword", "auto_submit": False})
     assert post_res.status_code == 200
     assert post_res.json()["status"] == "saved"
+
+
+def test_track_decision_endpoints(client):
+    # Test confirm endpoint
+    conf_res = client.post("/api/track/confirm", json={"track_id": "test_track_1", "candidate_id": "cand_1"})
+    assert conf_res.status_code == 200
+    assert conf_res.json()["status"] == "confirmed"
+
+    # Test skip endpoint
+    skip_res = client.post("/api/track/skip", json={"track_id": "test_track_1"})
+    assert skip_res.status_code == 200
+    assert skip_res.json()["status"] == "skipped"
+
+    # Test search custom endpoint
+    search_res = client.post("/api/track/search", json={"track_id": "test_track_1", "custom_query": "Artist - Custom Song"})
+    assert search_res.status_code == 200
+    assert search_res.json()["status"] == "searching"
+
+    # Test decide endpoint
+    decide_res = client.post("/api/track/decide", json={"track_id": "test_track_1", "action": "CONFIRM", "candidate_id": "cand_1"})
+    assert decide_res.status_code == 200
+    assert decide_res.json()["status"] == "decision_received"

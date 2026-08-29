@@ -143,8 +143,9 @@ class DownloadOrchestrator:
         await manager.broadcast({"type": "job_resumed"})
 
     def provide_decision(self, track_id: str, action: str, candidate_id: Optional[str] = None, custom_query: Optional[str] = None):
+        act = (action or "skip").lower()
         self.user_decisions[track_id] = {
-            "action": action,
+            "action": act,
             "candidate_id": candidate_id,
             "custom_query": custom_query
         }
@@ -535,7 +536,51 @@ async def decide_track(decision: DecisionRequest):
     return {"status": "decision_received", "track_id": decision.track_id}
 
 
+@app.post("/api/track/confirm")
+async def confirm_track(payload: Dict[str, Any]):
+    """Confirms candidate selection for a track and enqueues background download."""
+    track_id = payload.get("track_id")
+    candidate_id = payload.get("candidate_id")
+    if not track_id:
+        raise HTTPException(status_code=400, detail="Missing 'track_id'")
+    orchestrator.provide_decision(
+        track_id=track_id,
+        action="confirm",
+        candidate_id=candidate_id
+    )
+    return {"status": "confirmed", "track_id": track_id, "candidate_id": candidate_id}
+
+
+@app.post("/api/track/skip")
+async def skip_track(payload: Dict[str, Any]):
+    """Skips the active track and moves to the next."""
+    track_id = payload.get("track_id")
+    if not track_id:
+        raise HTTPException(status_code=400, detail="Missing 'track_id'")
+    orchestrator.provide_decision(
+        track_id=track_id,
+        action="skip"
+    )
+    return {"status": "skipped", "track_id": track_id}
+
+
+@app.post("/api/track/search")
+async def search_custom_track(payload: Dict[str, Any]):
+    """Triggers custom re-search for the active track."""
+    track_id = payload.get("track_id")
+    custom_query = payload.get("custom_query")
+    if not track_id:
+        raise HTTPException(status_code=400, detail="Missing 'track_id'")
+    orchestrator.provide_decision(
+        track_id=track_id,
+        action="custom_search",
+        custom_query=custom_query
+    )
+    return {"status": "searching", "track_id": track_id, "query": custom_query}
+
+
 @app.post("/api/track/jump")
+@app.post("/api/orchestrator/jump")
 async def jump_to_track(payload: Dict[str, Any]):
     """Allows user to jump immediately to searching a specific track."""
     track_id = payload.get("track_id")
