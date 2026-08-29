@@ -299,6 +299,9 @@ class DownloadQueueManager:
                         "artist": t.spotify_track.artist,
                         "filename": fn,
                         "file_path": t.downloaded_file_path or "",
+                        "bpm": t.spotify_track.bpm,
+                        "musical_key": t.spotify_track.musical_key,
+                        "camelot_key": t.spotify_track.camelot_key,
                         "completed_at": "Saved"
                     })
 
@@ -360,6 +363,9 @@ class DownloadQueueManager:
                         "artist": track.artist,
                         "filename": file_path.name,
                         "file_path": str(file_path),
+                        "bpm": track.bpm,
+                        "musical_key": track.musical_key,
+                        "camelot_key": track.camelot_key,
                         "completed_at": datetime.now().strftime("%H:%M:%S")
                     })
 

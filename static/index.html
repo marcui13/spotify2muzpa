@@ -207,16 +207,38 @@
             <span id="activeStatusBadge" class="text-xs px-2.5 py-0.5 rounded-full font-mono badge-pending">STANDBY</span>
           </div>
 
-          <!-- Selected Track Summary -->
-          <div id="activeTrackBox" class="flex gap-4 items-center bg-spotify-light/60 p-3.5 rounded-xl border border-white/5 relative">
-            <img id="activeCover" src="https://via.placeholder.com/80x80/222222/888888?text=Track" alt="Cover" class="w-16 h-16 rounded-lg object-cover bg-neutral-900 border border-white/10 shrink-0">
-            <div class="flex-1 min-w-0">
-              <h4 id="activeTitle" class="text-base font-bold text-white truncate">No Track Selected</h4>
-              <p id="activeArtist" class="text-xs text-spotify truncate mt-0.5 font-medium">Artist Name</p>
-              <div class="flex items-center gap-3 text-[11px] text-spotify-muted mt-1">
-                <span id="activeAlbum" class="truncate"><i class="fa-solid fa-compact-disc text-[10px]"></i> Album</span>
-                <span id="activeDuration"><i class="fa-regular fa-clock text-[10px]"></i> 0:00</span>
-                <a id="activeSpotifyLink" href="#" target="_blank" class="text-spotify hover:underline flex items-center gap-1">Spotify <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i></a>
+          <!-- Selected Track Summary with DJ Audio Analysis -->
+          <div id="activeTrackBox" class="flex flex-col gap-3 bg-spotify-light/60 p-4 rounded-xl border border-white/5 relative">
+            <div class="flex gap-4 items-center">
+              <img id="activeCover" src="https://via.placeholder.com/80x80/222222/888888?text=Track" alt="Cover" class="w-16 h-16 rounded-lg object-cover bg-neutral-900 border border-white/10 shrink-0">
+              <div class="flex-1 min-w-0">
+                <h4 id="activeTitle" class="text-base font-bold text-white truncate">No Track Selected</h4>
+                <p id="activeArtist" class="text-xs text-spotify truncate mt-0.5 font-medium">Artist Name</p>
+                <div class="flex items-center gap-3 text-[11px] text-spotify-muted mt-1">
+                  <span id="activeAlbum" class="truncate"><i class="fa-solid fa-compact-disc text-[10px]"></i> Album</span>
+                  <span id="activeDuration"><i class="fa-regular fa-clock text-[10px]"></i> 0:00</span>
+                  <a id="activeSpotifyLink" href="#" target="_blank" class="text-spotify hover:underline flex items-center gap-1">Spotify <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i></a>
+                </div>
+              </div>
+            </div>
+
+            <!-- Dedicated DJ Audio & Harmonic Analysis Pill Bar -->
+            <div id="activeDjStatsBox" class="pt-2.5 border-t border-white/5 flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] uppercase tracking-wider font-bold text-neutral-400 flex items-center gap-1">
+                  <i class="fa-solid fa-sliders text-spotify"></i> DJ Audio Features:
+                </span>
+                <span id="djBpmPill" class="bg-cyan-950/80 border border-cyan-700/60 text-cyan-300 px-2 py-0.5 rounded-md text-xs font-mono font-bold flex items-center gap-1 shadow-sm">
+                  <i class="fa-solid fa-gauge-high text-cyan-400 text-[10px]"></i> <span id="djBpmVal">-- BPM</span>
+                </span>
+                <span id="djKeyPill" class="bg-amber-950/80 border border-amber-700/60 text-amber-300 px-2 py-0.5 rounded-md text-xs font-mono font-bold flex items-center gap-1 shadow-sm">
+                  <i class="fa-solid fa-music text-amber-400 text-[10px]"></i> <span id="djKeyVal">-- (Key)</span>
+                </span>
+              </div>
+              <div id="djEnergyBox" class="flex items-center gap-3 text-[11px] font-mono text-neutral-400">
+                <span id="djEnergyVal" class="flex items-center gap-1"><i class="fa-solid fa-bolt text-yellow-400 text-[10px]"></i> Energy: --%</span>
+                <span class="text-neutral-700">•</span>
+                <span id="djDanceVal" class="flex items-center gap-1"><i class="fa-solid fa-person-walking text-purple-400 text-[10px]"></i> Dance: --%</span>
               </div>
             </div>
           </div>
@@ -841,11 +863,13 @@
               <i class="fa-solid fa-circle-check text-emerald-400 text-xs"></i>
               <div class="min-w-0">
                 <p class="text-xs font-bold text-white truncate">${escapeHtml(item.title)}</p>
-                <p class="text-[10px] text-spotify-muted truncate flex items-center gap-1">
-                  <span>${escapeHtml(item.artist)}</span>
+                <div class="text-[10px] text-spotify-muted truncate flex items-center gap-1.5 mt-0.5">
+                  <span class="truncate">${escapeHtml(item.artist)}</span>
                   <span class="text-neutral-600">•</span>
-                  <span class="text-neutral-400 font-mono"><i class="fa-solid fa-file-audio text-[9px] mr-0.5"></i>${escapeHtml(item.filename || 'audio.mp3')}</span>
-                </p>
+                  <span class="text-neutral-400 font-mono truncate"><i class="fa-solid fa-file-audio text-[9px] mr-0.5"></i>${escapeHtml(item.filename || 'audio.mp3')}</span>
+                  ${item.bpm ? `<span class="bg-cyan-950 text-cyan-300 border border-cyan-800 px-1.5 py-0.2 rounded font-mono text-[9px] shrink-0"><i class="fa-solid fa-gauge text-[8px] mr-0.5"></i>${item.bpm}</span>` : ''}
+                  ${item.camelot_key ? `<span class="bg-amber-950 text-amber-300 border border-amber-800 px-1.5 py-0.2 rounded font-mono text-[9px] shrink-0"><i class="fa-solid fa-music text-[8px] mr-0.5"></i>${item.camelot_key}</span>` : ''}
+                </div>
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
@@ -899,8 +923,8 @@
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
-            ${tr.bpm ? `<span class="text-[9px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-1.5 py-0.5 rounded" title="BPM"><i class="fa-solid fa-gauge text-[8px] mr-0.5"></i>${tr.bpm}</span>` : ''}
-            ${tr.camelot_key ? `<span class="text-[9px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5"></i>${tr.camelot_key}</span>` : ''}
+            ${tr.bpm ? `<span class="text-[9px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-1.5 py-0.5 rounded" title="Tempo: ${tr.bpm} BPM"><i class="fa-solid fa-gauge text-[8px] mr-0.5"></i>${tr.bpm}</span>` : ''}
+            ${tr.camelot_key ? `<span class="text-[9px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded" title="Key: ${tr.camelot_key} (${tr.musical_key || ''})"><i class="fa-solid fa-music text-[8px] mr-0.5"></i>${tr.camelot_key}</span>` : ''}
             <span class="text-[10px] font-mono text-neutral-500">${tr.duration_str}</span>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full ${statusClass}">${statusIcon}${t.status}</span>
             <button onclick="resetTrackById('${tr.id}', event)" title="Reset this track state" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-cyan-400 p-1 rounded text-xs transition">
@@ -919,17 +943,32 @@
       document.getElementById("activeTitle").innerText = tr.title;
       document.getElementById("activeArtist").innerText = tr.artist;
       document.getElementById("activeAlbum").innerHTML = `<i class="fa-solid fa-compact-disc text-[10px]"></i> ${tr.album}`;
-      
-      let durationHtml = `<i class="fa-regular fa-clock text-[10px]"></i> ${tr.duration_str}`;
-      if (tr.bpm) {
-        durationHtml += ` • <span class="text-cyan-400 font-mono"><i class="fa-solid fa-gauge text-[10px]"></i> ${tr.bpm} BPM</span>`;
-      }
-      if (tr.camelot_key) {
-        durationHtml += ` • <span class="text-amber-300 font-mono"><i class="fa-solid fa-music text-[10px]"></i> ${tr.camelot_key}${tr.musical_key ? ' (' + tr.musical_key + ')' : ''}</span>`;
-      }
-      document.getElementById("activeDuration").innerHTML = durationHtml;
+      document.getElementById("activeDuration").innerHTML = `<i class="fa-regular fa-clock text-[10px]"></i> ${tr.duration_str}`;
       document.getElementById("activeSpotifyLink").href = tr.spotify_url || "#";
       
+      // Update Dedicated DJ Audio Features Banner
+      const bpmEl = document.getElementById("djBpmVal");
+      const keyEl = document.getElementById("djKeyVal");
+      const energyEl = document.getElementById("djEnergyVal");
+      const danceEl = document.getElementById("djDanceVal");
+
+      if (bpmEl) {
+        bpmEl.innerText = tr.bpm ? `${tr.bpm} BPM` : '-- BPM';
+      }
+      if (keyEl) {
+        keyEl.innerText = tr.camelot_key ? `${tr.camelot_key} • ${tr.musical_key || ''}` : '-- (Key)';
+      }
+      if (energyEl) {
+        energyEl.innerHTML = (tr.energy !== undefined && tr.energy !== null)
+          ? `<i class="fa-solid fa-bolt text-yellow-400 text-[10px]"></i> Energy: ${Math.round(tr.energy * 100)}%`
+          : `<i class="fa-solid fa-bolt text-neutral-600 text-[10px]"></i> Energy: --`;
+      }
+      if (danceEl) {
+        danceEl.innerHTML = (tr.danceability !== undefined && tr.danceability !== null)
+          ? `<i class="fa-solid fa-person-walking text-purple-400 text-[10px]"></i> Dance: ${Math.round(tr.danceability * 100)}%`
+          : `<i class="fa-solid fa-person-walking text-neutral-600 text-[10px]"></i> Dance: --`;
+      }
+
       if (tr.image_url) {
         document.getElementById("activeCover").src = tr.image_url;
       }
