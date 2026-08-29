@@ -69,6 +69,94 @@ def detect_available_browsers() -> Dict[str, Dict[str, Any]]:
     return detected
 
 
+def parse_duration_string(val: Optional[str] = None, raw_text: str = "", target_duration_ms: int = 0) -> str:
+    """
+    Robustly parses and normalizes track duration strings into clean MM:SS or H:MM:SS format.
+    Handles:
+      - Clean timestamps: '03:45', '3:45', '1:05:30'
+      - Text with units: '3m 45s', '3m45s', '03:45 min', '225 sec'
+      - Pure seconds/milliseconds: '225', '225.5', '225000'
+      - Raw text fallback with music duration filtering & proximity matching to target Spotify track.
+    """
+    def _seconds_to_str(total_seconds: int) -> str:
+        if total_seconds < 0:
+            return "0:00"
+        hours = total_seconds // 3600
+        mins = (total_seconds % 3600) // 60
+        secs = total_seconds % 60
+        if hours > 0:
+            return f"{hours}:{mins:02d}:{secs:02d}"
+        return f"{mins}:{secs:02d}"
+
+    def _str_to_seconds(time_str: str) -> Optional[int]:
+        parts = time_str.strip().split(":")
+        try:
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+            elif len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    # 1. Try explicit val if provided
+    if val:
+        v = str(val).strip().strip("()[]{}|•- ")
+        
+        # Format: MM:SS or H:MM:SS
+        if re.match(r"^\d{1,2}:\d{2}(?::\d{2})?$", v):
+            secs = _str_to_seconds(v)
+            if secs is not None and 10 <= secs <= 7200:
+                return _seconds_to_str(secs)
+
+        # Format: 3m 45s, 3min 45sec
+        min_sec_match = re.search(r"(\d+)\s*(?:m|min|mins|'|:)\s*(\d+)\s*(?:s|sec|secs|\"|$)", v, re.IGNORECASE)
+        if min_sec_match:
+            mins, secs = int(min_sec_match.group(1)), int(min_sec_match.group(2))
+            return _seconds_to_str(mins * 60 + secs)
+
+        # Format: pure numbers (seconds or ms)
+        if re.match(r"^\d+(?:\.\d+)?\s*(?:s|sec|secs)?$", v, re.IGNORECASE):
+            num_str = re.sub(r"[^\d.]", "", v)
+            try:
+                num = float(num_str)
+                if num > 10000:  # milliseconds
+                    num = num / 1000.0
+                total_secs = int(round(num))
+                if 10 <= total_secs <= 7200:
+                    return _seconds_to_str(total_secs)
+            except Exception:
+                pass
+
+        # Check for timestamp inside string (e.g. "Duration: 03:45" or "03:45 / 320kbps")
+        embedded_match = re.search(r"(?:^|\s|\(|\[)([0-5]?\d:[0-5]\d)(?:\s|\)|\]|$)", v)
+        if embedded_match:
+            secs = _str_to_seconds(embedded_match.group(1))
+            if secs is not None and 10 <= secs <= 7200:
+                return _seconds_to_str(secs)
+
+    # 2. Extract from raw_text with proximity matching
+    if raw_text:
+        # Find all timestamp candidates in raw_text
+        found_matches = re.findall(r"\b([0-5]?\d:[0-5]\d)\b", raw_text)
+        valid_candidates = []
+        for m in found_matches:
+            s = _str_to_seconds(m)
+            if s is not None and 15 <= s <= 3600:  # Reasonable music track range 15s to 60min
+                valid_candidates.append((m, s))
+
+        if valid_candidates:
+            if target_duration_ms > 0:
+                target_sec = int(target_duration_ms / 1000)
+                # Pick the candidate closest to target track duration
+                best_match = min(valid_candidates, key=lambda c: abs(c[1] - target_sec))
+                return _seconds_to_str(best_match[1])
+            else:
+                return _seconds_to_str(valid_candidates[0][1])
+
+    return "--:--"
+
+
 class MuzpaCrawlerEngine:
     def __init__(self, browser_name: Optional[str] = None):
         self.browser_name = browser_name or settings.BROWSER_NAME
@@ -427,15 +515,12 @@ class MuzpaCrawlerEngine:
 
                     title_el = await el.query_selector(".track-title, .title, .song-name, strong, a.track-link")
                     artist_el = await el.query_selector(".track-artist, .artist, .artist-name, em")
-                    duration_el = await el.query_selector(".track-duration, .duration, .time")
                     dwnld_el = await el.query_selector("a.ms-release-dwnldbtn, a[href*='download'], button.download, .dwnldbtn")
 
                     if title_el:
                         cand_title = (await title_el.inner_text()).strip()
                     if artist_el:
                         cand_artist = (await artist_el.inner_text()).strip()
-                    if duration_el:
-                        cand_duration = (await duration_el.inner_text()).strip()
                     if dwnld_el:
                         direct_href = await dwnld_el.get_attribute("href")
 
@@ -452,10 +537,50 @@ class MuzpaCrawlerEngine:
                                 cand_title = lines[0]
                                 cand_artist = track.artist
 
-                    if not cand_duration:
-                        dur_match = re.search(r"\b(\d{1,2}:\d{2})\b", raw_text)
-                        if dur_match:
-                            cand_duration = dur_match.group(1)
+                    # Extract duration using DOM evaluate with selectors/attributes + parse_duration_string
+                    try:
+                        dom_dur = await el.evaluate("""(node) => {
+                            const durSelectors = [
+                                '.ms-release-track-duration',
+                                '.ms-release-track-time',
+                                '.ms-track-duration',
+                                '.ms-track-time',
+                                '.track-duration',
+                                '.track-time',
+                                '.duration',
+                                '.time',
+                                '.length',
+                                'span[class*="duration"]',
+                                'span[class*="time"]',
+                                'div[class*="duration"]',
+                                'div[class*="time"]',
+                                '[ng-bind*="duration"]',
+                                '[ng-bind*="length"]',
+                                '[ng-bind*="time"]'
+                            ];
+                            for (const sel of durSelectors) {
+                                const found = node.querySelector(sel);
+                                if (found) {
+                                    const txt = (found.innerText || found.textContent || '').trim();
+                                    if (txt && !txt.toLowerCase().includes('kbps')) return txt;
+                                }
+                            }
+                            const attrNames = ['data-duration', 'data-time', 'data-length', 'duration', 'length'];
+                            for (const attr of attrNames) {
+                                if (node.hasAttribute(attr)) return node.getAttribute(attr);
+                                const childWithAttr = node.querySelector(`[${attr}]`);
+                                if (childWithAttr) return childWithAttr.getAttribute(attr);
+                            }
+                            return '';
+                        }""")
+                    except Exception:
+                        dom_dur = ""
+
+                    cand_duration = parse_duration_string(
+                        val=dom_dur,
+                        raw_text=raw_text,
+                        target_duration_ms=track.duration_ms
+                    )
 
                     bitrate_match = re.search(r"\b(320|256|192|128)\s*kbps\b", raw_text, re.IGNORECASE)
                     if bitrate_match:

@@ -58,3 +58,30 @@ def test_fuzzy_score_duration_penalty(crawler):
     score_exact_dur = crawler.calculate_fuzzy_score(target, "Levels", "Avicii", "03:20")
     
     assert score_exact_dur > score_mismatched_dur
+
+
+def test_parse_duration_string_formats():
+    from muzpa_crawler import parse_duration_string
+
+    # Standard MM:SS
+    assert parse_duration_string("03:45") == "3:45"
+    assert parse_duration_string("4:12") == "4:12"
+    assert parse_duration_string("1:05:30") == "1:05:30"
+
+    # Text formats with units
+    assert parse_duration_string("3m 45s") == "3:45"
+    assert parse_duration_string("3min 45sec") == "3:45"
+    assert parse_duration_string("04:12 min") == "4:12"
+
+    # Pure seconds and milliseconds
+    assert parse_duration_string("225") == "3:45"
+    assert parse_duration_string("225s") == "3:45"
+    assert parse_duration_string("225000") == "3:45"
+
+    # Extraction from raw_text with noise / timestamps
+    raw = "2024-05-12 14:30 Published 320 kbps 03:20 Download"
+    assert parse_duration_string(None, raw_text=raw, target_duration_ms=200000) == "3:20"
+
+    # Empty / invalid fallback
+    assert parse_duration_string(None, raw_text="no time here") == "--:--"
+
