@@ -68,3 +68,31 @@ def test_track_decision_endpoints(client):
     decide_res = client.post("/api/track/decide", json={"track_id": "test_track_1", "action": "CONFIRM", "candidate_id": "cand_1"})
     assert decide_res.status_code == 200
     assert decide_res.json()["status"] == "decision_received"
+
+
+def test_jump_to_track(client):
+    from server import orchestrator
+    from models import PlaylistJob, TrackState, SpotifyTrack
+
+    job = PlaylistJob(
+        playlist_id="test_pl_jump",
+        playlist_name="Test Jump",
+        playlist_url="https://open.spotify.com/playlist/test_pl_jump",
+        tracks=[
+            TrackState(spotify_track=SpotifyTrack(id="t1", title="Song 1", artist="Artist 1")),
+            TrackState(spotify_track=SpotifyTrack(id="t2", title="Song 2", artist="Artist 2")),
+            TrackState(spotify_track=SpotifyTrack(id="t3", title="Song 3", artist="Artist 3")),
+        ]
+    )
+    orchestrator.current_job = job
+
+    # Jump to track 3 (id: t3)
+    jump_res = client.post("/api/track/jump", json={"track_id": "t3"})
+    assert jump_res.status_code == 200
+    assert jump_res.json()["status"] == "jumped"
+    assert orchestrator.current_job.current_track_index == 2
+
+    # Clean up
+    if orchestrator._worker_task:
+        orchestrator._worker_task.cancel()
+    orchestrator.current_job = None

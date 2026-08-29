@@ -566,16 +566,39 @@
     }
 
     function handleWebSocketMessage(msg) {
-      if (msg.type === "state_update" || msg.type === "init_state") {
-        activeJob = msg.data.job;
-        if (msg.data.is_paused !== undefined) {
+      if (msg.type === "state_updated" || msg.type === "state_update" || msg.type === "initial_state" || msg.type === "init_state" || msg.type === "job_finished") {
+        const jobData = msg.data.job || msg.data;
+        if (jobData && jobData.tracks) {
+          activeJob = jobData;
+          renderJob(activeJob);
+        }
+        if (msg.data && msg.data.is_paused !== undefined) {
           isPausedState = msg.data.is_paused;
           updatePauseButton();
         }
-        if (msg.data.queue_summary) {
-          renderActiveDownloads(msg.data.queue_summary);
+        if (msg.queue_summary || (msg.data && msg.data.queue_summary)) {
+          renderActiveDownloads(msg.queue_summary || msg.data.queue_summary);
         }
-        renderJob(activeJob);
+      } else if (msg.type === "waiting_decision") {
+        if (activeJob && msg.data) {
+          const idx = activeJob.tracks.findIndex(t => t.spotify_track.id === msg.track_id);
+          if (idx !== -1) {
+            activeJob.tracks[idx] = msg.data;
+            activeJob.current_track_index = idx;
+            renderJob(activeJob);
+          }
+        } else {
+          fetchState();
+        }
+      } else if (msg.type === "track_searching") {
+        if (activeJob) {
+          const idx = activeJob.tracks.findIndex(t => t.spotify_track.id === msg.track_id);
+          if (idx !== -1) {
+            activeJob.tracks[idx].status = "SEARCHING";
+            activeJob.current_track_index = idx;
+            renderJob(activeJob);
+          }
+        }
       } else if (msg.type === "log") {
         appendLog(msg.data.message, msg.data.level);
       } else if (msg.type === "candidate_confirmed" || msg.type === "track_skipped") {
@@ -584,15 +607,18 @@
         if (msg.queue_summary) {
           renderActiveDownloads(msg.queue_summary);
         }
+        fetchState();
       }
     }
 
     function triggerDecisionLoader() {
       const loader = document.getElementById("decisionLoader");
-      loader.classList.remove("hidden");
-      setTimeout(() => {
-        loader.classList.add("hidden");
-      }, 1500);
+      if (loader) {
+        loader.classList.remove("hidden");
+        setTimeout(() => {
+          loader.classList.add("hidden");
+        }, 1500);
+      }
     }
 
     // API Interactions
@@ -644,6 +670,15 @@
     async function confirmCandidate(candidateId) {
       if (!currentTrackId) return;
       triggerDecisionLoader();
+
+      // Optimistically update candidate UI
+      const list = document.getElementById("candidatesList");
+      if (list) {
+        list.innerHTML = `<div class="text-xs text-spotify text-center py-8 border border-dashed border-spotify/30 rounded-xl font-mono flex items-center justify-center gap-2 animate-pulse">
+          <i class="fa-solid fa-cloud-arrow-down fa-bounce"></i> Enqueued! Advancing to search next track...
+        </div>`;
+      }
+
       await fetch("/api/track/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -654,6 +689,14 @@
     async function skipCurrentTrack() {
       if (!currentTrackId) return;
       triggerDecisionLoader();
+
+      const list = document.getElementById("candidatesList");
+      if (list) {
+        list.innerHTML = `<div class="text-xs text-neutral-400 text-center py-8 border border-dashed border-white/10 rounded-xl font-mono flex items-center justify-center gap-2 animate-pulse">
+          <i class="fa-solid fa-forward"></i> Skipped! Advancing to next track...
+        </div>`;
+      }
+
       await fetch("/api/track/skip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -664,6 +707,14 @@
     async function reSearchCurrentTrack() {
       if (!currentTrackId) return;
       const query = document.getElementById("searchQueryInput").value.trim();
+      
+      const list = document.getElementById("candidatesList");
+      if (list) {
+        list.innerHTML = `<div class="text-xs text-spotify text-center py-8 border border-dashed border-spotify/30 rounded-xl font-mono flex items-center justify-center gap-2 animate-pulse">
+          <i class="fa-solid fa-spinner fa-spin"></i> Searching Muzpa for: "${escapeHtml(query)}"...
+        </div>`;
+      }
+
       await fetch("/api/track/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -703,11 +754,23 @@
     }
 
     async function jumpToTrack(trackId) {
-      await fetch("/api/orchestrator/jump", {
+      if (!trackId) return;
+      currentTrackId = trackId;
+
+      // Optimistically update candidate spotlight to searching
+      const list = document.getElementById("candidatesList");
+      if (list) {
+        list.innerHTML = `<div class="text-xs text-spotify text-center py-8 border border-dashed border-spotify/30 rounded-xl font-mono flex items-center justify-center gap-2 animate-pulse">
+          <i class="fa-solid fa-spinner fa-spin"></i> Jumping to track & searching Muzpa...
+        </div>`;
+      }
+
+      await fetch("/api/track/jump", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ track_id: trackId })
       });
+      fetchState();
     }
 
     async function focusTab(target) {

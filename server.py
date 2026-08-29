@@ -164,23 +164,33 @@ class DownloadOrchestrator:
             await self.crawler.initialize(open_dashboard_tab=True)
             self.download_queue.start()
 
-            for idx, track_state in enumerate(self.current_job.tracks):
+            while self.current_job.current_track_index < len(self.current_job.tracks):
                 if self.is_paused:
                     logger.info("Processing loop paused by user.")
                     break
 
-                self.current_job.current_track_index = idx
+                idx = self.current_job.current_track_index
+                track_state = self.current_job.tracks[idx]
 
-                # Skip tracks that are already completed or already downloading in queue
+                # Skip tracks that are already completed or downloaded
                 if track_state.status in [TrackStatus.COMPLETED, TrackStatus.DOWNLOADING]:
+                    self.current_job.current_track_index += 1
                     continue
 
                 if track_state.status in [TrackStatus.SKIPPED]:
+                    self.current_job.current_track_index += 1
                     continue
 
                 await self._process_single_track(track_state)
+                
+                # Advance to next track
+                self.current_job.current_track_index += 1
                 StateManager.save_job(self.current_job)
-                await manager.broadcast({"type": "state_updated", "data": self.current_job.model_dump()})
+                await manager.broadcast({
+                    "type": "state_updated",
+                    "data": self.current_job.model_dump(),
+                    "queue_summary": self.download_queue.get_status_summary(self.current_job)
+                })
 
                 await asyncio.sleep(settings.RATE_LIMIT_DELAY_SECONDS)
 
@@ -193,7 +203,11 @@ class DownloadOrchestrator:
             if self.current_job:
                 self.current_job.is_running = False
                 StateManager.save_job(self.current_job)
-                await manager.broadcast({"type": "job_finished", "data": self.current_job.model_dump()})
+                await manager.broadcast({
+                    "type": "job_finished",
+                    "data": self.current_job.model_dump(),
+                    "queue_summary": self.download_queue.get_status_summary(self.current_job)
+                })
 
     async def _process_single_track(self, track_state: TrackState):
         """Searches and resolves a single track, enqueuing downloads asynchronously."""
@@ -202,7 +216,12 @@ class DownloadOrchestrator:
 
         logger.info(f"Processing track [{self.current_job.current_track_index + 1}/{len(self.current_job.tracks)}]: {track.artist} - {track.title}")
         track_state.status = TrackStatus.SEARCHING
-        await manager.broadcast({"type": "track_searching", "track_id": track_id})
+        # Broadcast immediately so UI spotlights this track and shows searching spinner
+        await manager.broadcast({
+            "type": "state_updated",
+            "data": self.current_job.model_dump(),
+            "queue_summary": self.download_queue.get_status_summary(self.current_job)
+        })
 
         custom_query = None
 
@@ -591,14 +610,27 @@ async def jump_to_track(payload: Dict[str, Any]):
     if target_idx is None:
         raise HTTPException(status_code=404, detail="Track not found in current job.")
 
-    orchestrator.current_job.tracks[target_idx].status = TrackStatus.PENDING
+    # Unblock any waiting decision event
+    for ev in list(orchestrator.decision_events.values()):
+        ev.set()
+    orchestrator.decision_events.clear()
+
+    if orchestrator.current_job.tracks[target_idx].status != TrackStatus.COMPLETED:
+        orchestrator.current_job.tracks[target_idx].status = TrackStatus.PENDING
     orchestrator.current_job.current_track_index = target_idx
     
     if orchestrator._worker_task and not orchestrator._worker_task.done():
         orchestrator._worker_task.cancel()
     
     orchestrator._worker_task = asyncio.create_task(orchestrator._run_orchestrator_loop())
-    return {"status": "jumped", "track_index": target_idx}
+    
+    # Broadcast state immediately
+    await manager.broadcast({
+        "type": "state_updated",
+        "data": orchestrator.current_job.model_dump(),
+        "queue_summary": orchestrator.download_queue.get_status_summary(orchestrator.current_job)
+    })
+    return {"status": "jumped", "track_index": target_idx, "track_id": track_id}
 
 
 @app.post("/api/browser/focus")
