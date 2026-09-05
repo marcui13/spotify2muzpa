@@ -31,6 +31,13 @@ def find_free_port(preferred_port: int = 8000) -> int:
 
 def start_server_thread(host: str, port: int):
     """Starts Uvicorn FastAPI server in a dedicated background daemon thread."""
+    import asyncio
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    except Exception as e:
+        logger.debug(f"Event loop setup notice: {e}")
+
     from server import app
     config = uvicorn.Config(
         app=app,

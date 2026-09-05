@@ -102,7 +102,13 @@ class DownloadOrchestrator:
         self.decision_events: Dict[str, asyncio.Event] = {}
         self.user_decisions: Dict[str, Dict[str, Any]] = {}
         self._worker_task: Optional[asyncio.Task] = None
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def _on_download_update(self, event_data: Dict[str, Any]):
         """Broadcasts download progress/completion and saves state."""
@@ -115,7 +121,7 @@ class DownloadOrchestrator:
         await self.crawler.initialize(browser_name=browser_name, open_dashboard_tab=open_dashboard_tab)
 
     async def start_job(self, job: PlaylistJob):
-        async with self._lock:
+        async with self.lock:
             self.current_job = job
             self.is_paused = False
             for ev in list(self.decision_events.values()):

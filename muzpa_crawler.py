@@ -164,15 +164,21 @@ class MuzpaCrawlerEngine:
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
         self._dashboard_page: Optional[Page] = None
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._is_initialized = False
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def initialize(self, browser_name: Optional[str] = None, open_dashboard_tab: bool = True) -> None:
         """Initializes persistent browser context with the chosen browser."""
         if browser_name:
             self.browser_name = browser_name
 
-        async with self._lock:
+        async with self.lock:
             if self._is_initialized and self._context and self._page:
                 if open_dashboard_tab and not settings.HEADLESS:
                     await self._ensure_dashboard_tab()
@@ -274,7 +280,7 @@ class MuzpaCrawlerEngine:
 
     async def close(self) -> None:
         """Closes browser context and Playwright instance."""
-        async with self._lock:
+        async with self.lock:
             if self._context:
                 try:
                     await self._context.close()
@@ -457,7 +463,7 @@ class MuzpaCrawlerEngine:
 
     async def search_track(self, track: SpotifyTrack, custom_query: Optional[str] = None) -> List[MuzpaCandidate]:
         """Searches Muzpa for track, parses DOM, and returns ranked candidates."""
-        async with self._lock:
+        async with self.lock:
             if not self._is_initialized:
                 await self.initialize(open_dashboard_tab=True)
 
