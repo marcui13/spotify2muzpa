@@ -1,7 +1,6 @@
-"""
-Spotify to Muzpa Studio - Desktop Application Launcher.
-Wraps the FastAPI server and Web Dashboard into a native desktop window (macOS Cocoa / Windows WebView).
-"""
+import warnings
+warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*")
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import sys
 import time

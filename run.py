@@ -1,11 +1,6 @@
-"""
-Unified CLI & Server Entrypoint for Spotify to Muzpa Downloader.
-
-Features:
-  - Interactive Web Browser Selection (Chrome, Brave, Edge, Chromium).
-  - Non-blocking Background Download Queue.
-  - Saves MP3s with ID3 metadata directly to ~/Downloads/<Playlist Name>.
-"""
+import warnings
+warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*")
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import sys
 import argparse

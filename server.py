@@ -1,7 +1,6 @@
-"""
-FastAPI Server & Real-time Orchestrator for Spotify to Muzpa Downloader.
-Provides REST endpoints, WebSocket streaming, non-blocking download queues, and browser management.
-"""
+import warnings
+warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*")
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import os
 import re

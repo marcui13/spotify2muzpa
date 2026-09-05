@@ -1,7 +1,6 @@
-"""
-Centralized Configuration Module for Spotify to Muzpa Downloader.
-Handles environment variables, default paths, and runtime settings.
-"""
+import warnings
+warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*")
+warnings.filterwarnings("ignore", category=UserWarning)
 
 from pathlib import Path
 from typing import Optional
