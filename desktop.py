@@ -28,6 +28,11 @@ def find_free_port(preferred_port: int = 8000) -> int:
         return port
 
 
+import os
+os.environ["IS_DESKTOP_APP"] = "1"
+os.environ["OPEN_DASHBOARD_TAB"] = "false"
+
+
 def start_server_thread(host: str, port: int):
     """Starts Uvicorn FastAPI server in a dedicated background daemon thread."""
     import asyncio
@@ -36,6 +41,10 @@ def start_server_thread(host: str, port: int):
         asyncio.set_event_loop(loop)
     except Exception as e:
         logger.debug(f"Event loop setup notice: {e}")
+
+    from config import settings
+    settings.IS_DESKTOP_APP = True
+    settings.OPEN_DASHBOARD_TAB = False
 
     from server import app
     config = uvicorn.Config(

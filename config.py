@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     # Web Dashboard Server Configuration
     HOST: str = Field(default="127.0.0.1", description="Server Host binding")
     PORT: int = Field(default=8000, description="Server Port")
+    OPEN_DASHBOARD_TAB: bool = Field(default=False, description="Open Web Dashboard tab in crawler browser window")
+    AUTO_LAUNCH_BROWSER: bool = Field(default=True, description="Automatically launch crawler browser on server startup")
+    IS_DESKTOP_APP: bool = Field(default=False, description="Whether running inside native desktop window")
 
     def ensure_directories(self) -> None:
         """Ensure that required operational directories exist on disk."""

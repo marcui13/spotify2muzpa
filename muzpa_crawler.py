@@ -173,14 +173,18 @@ class MuzpaCrawlerEngine:
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def initialize(self, browser_name: Optional[str] = None, open_dashboard_tab: bool = True) -> None:
+    async def initialize(self, browser_name: Optional[str] = None, open_dashboard_tab: Optional[bool] = None) -> None:
         """Initializes persistent browser context with the chosen browser."""
         if browser_name:
             self.browser_name = browser_name
 
+        should_open_tab = (
+            open_dashboard_tab if open_dashboard_tab is not None else settings.OPEN_DASHBOARD_TAB
+        ) and not settings.IS_DESKTOP_APP and not settings.HEADLESS
+
         async with self.lock:
             if self._is_initialized and self._context and self._page:
-                if open_dashboard_tab and not settings.HEADLESS:
+                if should_open_tab:
                     await self._ensure_dashboard_tab()
                 return
 
@@ -237,8 +241,8 @@ class MuzpaCrawlerEngine:
             except Exception as e:
                 logger.warning(f"Initial Muzpa navigation notice: {e}")
 
-            # 2. Open Page 2 for Spotify to Muzpa Dashboard in the exact same browser window
-            if open_dashboard_tab and not settings.HEADLESS:
+            # 2. Open Page 2 for Spotify to Muzpa Dashboard if explicitly requested
+            if should_open_tab:
                 await self._ensure_dashboard_tab()
 
             self._is_initialized = True
@@ -465,7 +469,7 @@ class MuzpaCrawlerEngine:
         """Searches Muzpa for track, parses DOM, and returns ranked candidates."""
         async with self.lock:
             if not self._is_initialized:
-                await self.initialize(open_dashboard_tab=True)
+                await self.initialize()
 
             query = custom_query or track.clean_search_query
             logger.info(f"Searching Muzpa for: '{query}'")

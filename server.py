@@ -170,7 +170,7 @@ class DownloadOrchestrator:
         logger.info(f"Starting playlist processing loop: '{self.current_job.playlist_name}'")
 
         try:
-            await self.crawler.initialize(open_dashboard_tab=True)
+            await self.crawler.initialize()
             self.download_queue.start()
 
             while self.current_job.current_track_index < len(self.current_job.tracks):
@@ -318,10 +318,11 @@ async def lifespan(app_instance: FastAPI):
     
     async def auto_open_browser():
         await asyncio.sleep(1.0)
-        if not settings.HEADLESS:
+        if not settings.HEADLESS and settings.AUTO_LAUNCH_BROWSER:
             try:
-                logger.info("Automatically opening browser with Muzpa & Dashboard tabs...")
-                await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=True)
+                open_tab = settings.OPEN_DASHBOARD_TAB and not settings.IS_DESKTOP_APP
+                logger.info(f"Initializing crawler browser (open_dashboard_tab={open_tab})...")
+                await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=open_tab)
             except Exception as e:
                 logger.warning(f"Browser auto-open background notice: {e}")
 
