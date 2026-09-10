@@ -240,17 +240,41 @@ class DownloadQueueManager:
 
     def __init__(self, crawler: MuzpaCrawlerEngine, on_update_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None):
         self.downloader = MuzpaDownloader(crawler)
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self._queue: Optional[asyncio.Queue] = None
         self.on_update = on_update_callback
         self.workers: list[asyncio.Task] = []
         self._running = False
         self.active_downloads: Dict[str, Dict[str, Any]] = {}
         self.completed_downloads: List[Dict[str, Any]] = []
 
+    @property
+    def queue(self) -> asyncio.Queue:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        elif current_loop is not None and hasattr(self._queue, "_loop") and self._queue._loop != current_loop:
+            old_items = []
+            while not self._queue.empty():
+                try:
+                    old_items.append(self._queue.get_nowait())
+                except (asyncio.QueueEmpty, RuntimeError):
+                    break
+            self._queue = asyncio.Queue()
+            for item in old_items:
+                self._queue.put_nowait(item)
+
+        return self._queue
+
     def start(self, num_workers: int = settings.MAX_CONCURRENT_DOWNLOADS):
         """Starts background download workers."""
         if self._running:
             return
+        # Touch queue on active running loop
+        _ = self.queue
         self._running = True
         for i in range(num_workers):
             task = asyncio.create_task(self._worker_loop(i + 1))
@@ -316,6 +340,14 @@ class DownloadQueueManager:
         while self._running:
             try:
                 job, track_state, candidate = await self.queue.get()
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
+                logger.error(f"[Worker #{worker_id}] Error in worker queue retrieve: {ex}")
+                await asyncio.sleep(0.5)
+                continue
+
+            try:
                 track = track_state.spotify_track
 
                 if track.id in self.active_downloads:
@@ -392,4 +424,5 @@ class DownloadQueueManager:
             except asyncio.CancelledError:
                 break
             except Exception as ex:
-                logger.error(f"[Worker #{worker_id}] Error in worker loop: {ex}", exc_info=True)
+                logger.error(f"[Worker #{worker_id}] Error in download worker execution: {ex}", exc_info=True)
+                await asyncio.sleep(0.5)
