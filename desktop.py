@@ -16,16 +16,19 @@ logger = logging.getLogger("desktop_app")
 
 
 def find_free_port(preferred_port: int = 8000) -> int:
-    """Finds an available local port, prioritizing preferred_port."""
+    """Finds an available local port that can be bound, prioritizing preferred_port."""
+    for p in [preferred_port] + list(range(preferred_port + 1, preferred_port + 40)):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("127.0.0.1", p))
+                return p
+        except OSError:
+            continue
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("127.0.0.1", preferred_port)) != 0:
-            return preferred_port
-    
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        s.listen(1)
-        port = s.getsockname()[1]
-        return port
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 import os
@@ -45,6 +48,8 @@ def start_server_thread(host: str, port: int):
     from config import settings
     settings.IS_DESKTOP_APP = True
     settings.OPEN_DASHBOARD_TAB = False
+    settings.HOST = host
+    settings.PORT = port
 
     from server import app
     config = uvicorn.Config(
