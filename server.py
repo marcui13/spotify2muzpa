@@ -525,6 +525,56 @@ async def reset_playlist(payload: Dict[str, Any] = None):
     return {"status": "reset", "scope": scope}
 
 
+@app.post("/api/playlist/sort")
+async def sort_playlist_dj(payload: Dict[str, Any] = None):
+    """Reorders active playlist tracks using Intelligent DJ Harmonic Sorting."""
+    payload = payload or {}
+    mode = payload.get("mode", "harmonic_flow")
+    start_track_id = payload.get("start_track_id")
+
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist job to sort.")
+
+    from dj_sorter import optimize_dj_sequence, analyze_set_flow
+
+    # Reorder tracks
+    sorted_tracks = optimize_dj_sequence(
+        tracks=orchestrator.current_job.tracks,
+        start_track_id=start_track_id,
+        mode=mode
+    )
+
+    orchestrator.current_job.tracks = sorted_tracks
+    orchestrator.current_job.current_track_index = 0
+
+    StateManager.save_job(orchestrator.current_job)
+    analysis = analyze_set_flow(orchestrator.current_job.tracks)
+
+    await manager.broadcast({
+        "type": "state_updated",
+        "data": orchestrator.current_job.model_dump(),
+        "queue_summary": orchestrator.download_queue.get_status_summary(orchestrator.current_job)
+    })
+
+    return {
+        "status": "sorted",
+        "mode": mode,
+        "analysis": analysis,
+        "job": orchestrator.current_job.model_dump()
+    }
+
+
+@app.get("/api/playlist/analysis")
+async def get_playlist_dj_analysis():
+    """Returns harmonic flow analysis and transition metrics for current playlist."""
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist job.")
+
+    from dj_sorter import analyze_set_flow
+    analysis = analyze_set_flow(orchestrator.current_job.tracks)
+    return analysis
+
+
 @app.post("/api/track/reset")
 async def reset_single_track(payload: Dict[str, Any]):
     """Resets a single track and immediately begins searching it."""

@@ -66,6 +66,8 @@ class TrackState(BaseModel):
     downloaded_file_path: Optional[str] = Field(default=None)
     error_message: Optional[str] = Field(default=None)
     retry_count: int = Field(default=0)
+    transition_quality: Optional[str] = Field(default=None, description="DJ transition quality from previous track")
+    transition_note: Optional[str] = Field(default=None, description="DJ transition technical note")
     updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 

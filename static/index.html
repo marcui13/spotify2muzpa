@@ -198,13 +198,31 @@
       
       <!-- Left Column: Track Queue List (5 cols) -->
       <section aria-labelledby="trackQueueTitle" class="lg:col-span-5 bg-spotify-card border border-spotify-border rounded-2xl p-4 flex flex-col h-[680px] shadow-xl">
-        <div class="flex items-center justify-between mb-3 px-1">
-          <h3 id="trackQueueTitle" class="text-sm font-bold text-neutral-200 flex items-center gap-2">
-            <i class="fa-solid fa-list-ol text-spotify" aria-hidden="true"></i> Track Queue
-          </h3>
-          <div class="relative w-36 sm:w-44">
-            <input type="text" id="trackSearchFilter" placeholder="Filter queue..." oninput="filterTracks(this.value)"
-              class="w-full bg-spotify-light border border-spotify-border rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:border-spotify transition">
+        <div class="flex flex-col gap-2.5 mb-3 px-1">
+          <div class="flex items-center justify-between">
+            <h3 id="trackQueueTitle" class="text-sm font-bold text-neutral-200 flex items-center gap-2">
+              <i class="fa-solid fa-list-ol text-spotify" aria-hidden="true"></i> Track Queue
+            </h3>
+            <div class="relative w-36 sm:w-44">
+              <input type="text" id="trackSearchFilter" placeholder="Filter queue..." oninput="filterTracks(this.value)"
+                class="w-full bg-spotify-light border border-spotify-border rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:border-spotify transition">
+            </div>
+          </div>
+
+          <!-- DJ Harmonic Sorter Control Bar -->
+          <div class="flex items-center justify-between bg-spotify-light/70 p-2 rounded-xl border border-spotify-border gap-2 text-xs">
+            <div class="flex items-center gap-1.5 min-w-0 flex-1">
+              <i class="fa-solid fa-wand-magic-sparkles text-amber-400 text-xs shrink-0" aria-hidden="true"></i>
+              <span class="font-bold text-[11px] text-white hidden sm:inline">DJ Mix Flow:</span>
+              <select id="djSortMode" class="bg-neutral-900 border border-spotify-border text-neutral-200 text-[11px] rounded-lg px-2 py-1 font-mono focus:border-spotify outline-none flex-1">
+                <option value="harmonic_flow">Harmonic Flow (Camelot ±1)</option>
+                <option value="bpm_climb">BPM Energy Climb</option>
+                <option value="camelot_ladder">Camelot Wheel Ladder</option>
+              </select>
+            </div>
+            <button onclick="applyDjSort()" id="djSortBtn" title="Optimize and reorder playlist tracks for seamless harmonic DJ mixing" class="bg-amber-500 hover:bg-amber-400 text-black font-bold px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1 transition shadow-sm shrink-0">
+              <i class="fa-solid fa-arrow-down-short-wide" aria-hidden="true"></i> <span>DJ Sort</span>
+            </button>
           </div>
         </div>
 
@@ -690,6 +708,46 @@
       await loadPlaylist(true);
     }
 
+    async function applyDjSort(startTrackId, event) {
+      if (event) event.stopPropagation();
+      if (!activeJob || !activeJob.tracks || activeJob.tracks.length === 0) {
+        alert("Please load a playlist first.");
+        return;
+      }
+
+      const mode = document.getElementById("djSortMode").value;
+      const btn = document.getElementById("djSortBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Sorting...`;
+      }
+
+      try {
+        const res = await fetch("/api/playlist/sort", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: mode, start_track_id: startTrackId || null })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Error sorting playlist.");
+        } else {
+          activeJob = data.job;
+          renderJob(activeJob);
+          const score = data.analysis ? data.analysis.compatibility_score : 100;
+          appendLog(`🪄 Set optimized with DJ Harmonic Flow (${mode}). Compatibility: ${score}%`, "system");
+        }
+      } catch (e) {
+        alert("Sort error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
     async function confirmCandidate(candidateId) {
       if (!currentTrackId) return;
       triggerDecisionLoader();
@@ -971,6 +1029,31 @@
       tracks.forEach((t, i) => {
         const isCurrent = (i === currentIndex);
         const tr = t.spotify_track;
+
+        // Render Harmonic Transition Bridge Pill
+        if (i > 0 && t.transition_note) {
+          const transPill = document.createElement("div");
+          transPill.className = "flex items-center justify-center gap-1.5 my-0.5 text-[10px] font-mono text-neutral-400 px-2.5 py-0.5 bg-neutral-950/80 rounded-full border border-white/5 w-fit mx-auto shadow-sm";
+          let qColor = "text-neutral-400";
+          let qIcon = '<i class="fa-solid fa-arrows-down-to-line text-[9px] text-spotify/70"></i>';
+          if (t.transition_quality === "Flawless") {
+            qColor = "text-emerald-400 font-bold";
+            qIcon = '<i class="fa-solid fa-sparkles text-[9px] text-emerald-400"></i>';
+          } else if (t.transition_quality === "Smooth" || t.transition_quality === "Harmonic Lift") {
+            qColor = "text-cyan-400 font-bold";
+            qIcon = '<i class="fa-solid fa-arrow-trend-up text-[9px] text-cyan-400"></i>';
+          } else if (t.transition_quality === "Energy Surge" || t.transition_quality === "Key Lift") {
+            qColor = "text-amber-400 font-bold";
+            qIcon = '<i class="fa-solid fa-bolt text-[9px] text-amber-400"></i>';
+          } else if (t.transition_quality === "Key Clash") {
+            qColor = "text-rose-400";
+            qIcon = '<i class="fa-solid fa-triangle-exclamation text-[9px] text-rose-400"></i>';
+          }
+
+          transPill.innerHTML = `${qIcon} <span class="${qColor}">${escapeHtml(t.transition_quality || '')}</span> <span class="text-neutral-600">•</span> <span class="text-neutral-300">${escapeHtml(t.transition_note || '')}</span>`;
+          container.appendChild(transPill);
+        }
+
         const item = document.createElement("div");
         item.setAttribute("role", "listitem");
         item.className = `p-2.5 rounded-xl border transition flex items-center justify-between cursor-pointer group ${
@@ -999,6 +1082,9 @@
             ${tr.camelot_key ? `<span class="text-[9px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5" aria-hidden="true"></i>${tr.camelot_key}</span>` : ''}
             <span class="text-[10px] font-mono text-neutral-500">${tr.duration_str}</span>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full ${statusClass}">${statusIcon}${t.status}</span>
+            <button onclick="applyDjSort('${tr.id}', event)" title="Harmonically sort playlist starting from this track as opener" aria-label="Start DJ set from ${escapeHtml(tr.title)}" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-amber-400 p-1 rounded text-xs transition">
+              <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+            </button>
             <button onclick="resetTrackById('${tr.id}', event)" title="Reset this track state" aria-label="Reset track ${escapeHtml(tr.title)}" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-cyan-400 p-1 rounded text-xs transition">
               <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
             </button>
