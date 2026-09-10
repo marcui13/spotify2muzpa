@@ -576,6 +576,75 @@ async def get_playlist_dj_analysis():
     return analysis
 
 
+@app.post("/api/folder/load")
+async def load_local_folder(payload: Dict[str, Any]):
+    """Loads audio tracks from a local directory for DJ inspection and sorting."""
+    folder_path = payload.get("folder_path")
+    if not folder_path:
+        raise HTTPException(status_code=400, detail="Missing 'folder_path' parameter.")
+
+    from local_folder_service import scan_folder_tracks
+    try:
+        folder_name, tracks = scan_folder_tracks(folder_path)
+    except Exception as e:
+        logger.error(f"Error scanning local folder: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    playlist_id = f"folder_{abs(hash(folder_path))}"
+    job = PlaylistJob(
+        playlist_id=playlist_id,
+        playlist_name=folder_name,
+        playlist_url=str(Path(folder_path).expanduser().resolve()),
+        tracks=tracks,
+        auto_mode=False
+    )
+
+    # In local folder mode, do not auto-run the crawler loop since files are already present
+    orchestrator.current_job = job
+    StateManager.save_job(job)
+
+    await manager.broadcast({
+        "type": "state_updated",
+        "data": job.model_dump(),
+        "queue_summary": orchestrator.download_queue.get_status_summary(job)
+    })
+
+    return {"status": "success", "job": job.model_dump(), "folder_name": folder_name}
+
+
+@app.post("/api/folder/rename-order")
+async def rename_folder_order():
+    """Physically renames audio files with sequential numbers (01 -, 02 -) based on current sorted order."""
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist or folder loaded.")
+
+    from local_folder_service import rename_files_with_order
+    renamed = rename_files_with_order(orchestrator.current_job)
+    StateManager.save_job(orchestrator.current_job)
+
+    await manager.broadcast({
+        "type": "state_updated",
+        "data": orchestrator.current_job.model_dump(),
+        "queue_summary": orchestrator.download_queue.get_status_summary(orchestrator.current_job)
+    })
+
+    return {"status": "renamed", "renamed_count": len(renamed), "files": renamed}
+
+
+@app.post("/api/folder/export-m3u")
+async def export_folder_m3u():
+    """Exports an .m3u8 playlist file into the audio folder matching the current DJ sequence."""
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist or folder loaded.")
+
+    from local_folder_service import export_m3u8
+    try:
+        path = export_m3u8(orchestrator.current_job)
+        return {"status": "exported", "m3u8_path": str(path), "filename": path.name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export M3U8: {e}")
+
+
 @app.post("/api/track/reset")
 async def reset_single_track(payload: Dict[str, Any]):
     """Resets a single track and immediately begins searching it."""

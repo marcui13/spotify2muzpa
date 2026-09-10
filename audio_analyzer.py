@@ -42,6 +42,44 @@ def pitch_and_mode_to_key(key_int: Optional[int], mode_int: Optional[int]) -> Tu
     return musical, camelot
 
 
+KEY_NAME_TO_CAMELOT = {
+    # Minor
+    "C MINOR": "5A", "CM": "5A", "C MIN": "5A",
+    "C# MINOR": "12A", "C#M": "12A", "DB MINOR": "12A", "DBM": "12A",
+    "D MINOR": "7A", "DM": "7A", "D MIN": "7A",
+    "D# MINOR": "2A", "D#M": "2A", "EB MINOR": "2A", "EBM": "2A",
+    "E MINOR": "9A", "EM": "9A", "E MIN": "9A",
+    "F MINOR": "4A", "FM": "4A", "F MIN": "4A",
+    "F# MINOR": "11A", "F#M": "11A", "GB MINOR": "11A", "GBM": "11A",
+    "G MINOR": "6A", "GM": "6A", "G MIN": "6A",
+    "G# MINOR": "1A", "G#M": "1A", "AB MINOR": "1A", "ABM": "1A",
+    "A MINOR": "8A", "AM": "8A", "A MIN": "8A",
+    "A# MINOR": "3A", "A#M": "3A", "BB MINOR": "3A", "BBM": "3A",
+    "B MINOR": "10A", "BM": "10A", "B MIN": "10A",
+    # Major
+    "C MAJOR": "8B", "C": "8B", "C MAJ": "8B",
+    "C# MAJOR": "3B", "C#": "3B", "DB MAJOR": "3B", "DB": "3B",
+    "D MAJOR": "10B", "D": "10B", "D MAJ": "10B",
+    "D# MAJOR": "5B", "D#": "5B", "EB MAJOR": "5B", "EB": "5B",
+    "E MAJOR": "12B", "E": "12B", "E MAJ": "12B",
+    "F MAJOR": "7B", "F": "7B", "F MAJ": "7B",
+    "F# MAJOR": "2B", "F#": "2B", "GB MAJOR": "2B", "GB": "2B",
+    "G MAJOR": "9B", "G": "9B", "G MAJ": "9B",
+    "G# MAJOR": "4B", "G#": "4B", "AB MAJOR": "4B", "AB": "4B",
+    "A MAJOR": "11B", "A": "11B", "A MAJ": "11B",
+    "A# MAJOR": "6B", "A#": "6B", "BB MAJOR": "6B", "BB": "6B",
+    "B MAJOR": "1B", "B": "1B", "B MAJ": "1B",
+}
+
+
+def musical_key_to_camelot(key_str: Optional[str]) -> Optional[str]:
+    """Maps standard musical key strings (e.g. 'A Minor', 'Gm', 'C# Major') to Camelot Wheel notation."""
+    if not key_str:
+        return None
+    cleaned = key_str.strip().upper()
+    return KEY_NAME_TO_CAMELOT.get(cleaned)
+
+
 def estimate_bpm_from_file(file_path: Path) -> Optional[int]:
     """
     Estimates BPM from MP3 frame timing or audio headers if available.

@@ -56,9 +56,9 @@ def tag_mp3_metadata(file_path: Path, track: SpotifyTrack) -> bool:
 
         audio.save()
 
-        # Add advanced DJ frames (TBPM, TKEY, TXXX) using Mutagen ID3
+        # Add advanced DJ frames (TBPM, TKEY, TXXX, COMM, APIC) using Mutagen ID3
         try:
-            from mutagen.id3 import ID3, TBPM, TKEY, TXXX, COMM
+            from mutagen.id3 import ID3, TBPM, TKEY, TXXX, COMM, APIC
             id3 = ID3(str(file_path))
             if track.bpm:
                 id3.add(TBPM(encoding=3, text=str(track.bpm)))
@@ -81,7 +81,28 @@ def tag_mp3_metadata(file_path: Path, track: SpotifyTrack) -> bool:
             if comment_parts:
                 id3.add(COMM(encoding=3, lang="eng", desc="DJ_INFO", text=" | ".join(comment_parts)))
 
-            id3.save()
+            # Fetch and embed high-res cover art from Spotify image_url
+            if track.image_url and str(track.image_url).startswith("http"):
+                try:
+                    import requests
+                    img_resp = requests.get(track.image_url, timeout=10)
+                    if img_resp.status_code == 200 and len(img_resp.content) > 1000:
+                        mime = img_resp.headers.get("Content-Type", "image/jpeg")
+                        mime = "image/png" if "png" in mime else "image/jpeg"
+                        
+                        id3.delall("APIC")
+                        id3.add(APIC(
+                            encoding=3,
+                            mime=mime,
+                            type=3,  # 3 = Front Cover
+                            desc="Cover",
+                            data=img_resp.content
+                        ))
+                        logger.debug(f"Embedded cover art ({len(img_resp.content)} bytes) into '{file_path.name}'")
+                except Exception as img_err:
+                    logger.debug(f"Could not download cover art for '{track.title}': {img_err}")
+
+            id3.save(v2_version=3)
         except Exception as ex:
             logger.debug(f"Advanced ID3 frame writing notice: {ex}")
 

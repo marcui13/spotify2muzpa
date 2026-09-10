@@ -123,11 +123,22 @@
   <!-- Main Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 flex flex-col gap-6">
 
-    <!-- Playlist Loader Card -->
+    <!-- Playlist / Audio Folder Loader Card -->
     <section aria-labelledby="playlistLoaderTitle" class="bg-spotify-card border border-spotify-border rounded-2xl p-5 shadow-2xl relative overflow-hidden">
       <div class="absolute -right-20 -top-20 w-60 h-60 bg-spotify/10 rounded-full blur-3xl pointer-events-none" aria-hidden="true"></div>
 
-      <div class="flex flex-col md:flex-row gap-4 items-center justify-between relative z-10">
+      <!-- Source Selection Tabs -->
+      <div class="flex items-center gap-2 mb-4 border-b border-spotify-border pb-3 relative z-10">
+        <button id="srcTabSpotifyBtn" onclick="switchSourceTab('spotify')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify text-black transition shadow-sm">
+          <i class="fa-brands fa-spotify text-sm" aria-hidden="true"></i> <span>Spotify Playlist</span>
+        </button>
+        <button id="srcTabFolderBtn" onclick="switchSourceTab('folder')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
+          <i class="fa-solid fa-folder-open text-amber-400 text-sm" aria-hidden="true"></i> <span>Local Audio Folder (DJ Set)</span>
+        </button>
+      </div>
+
+      <!-- Spotify Playlist Input Group -->
+      <div id="srcSpotifyGroup" class="flex flex-col md:flex-row gap-4 items-center justify-between relative z-10">
         <div class="w-full flex-1">
           <label id="playlistLoaderTitle" for="playlistInput" class="block text-xs font-bold text-spotify-muted mb-1.5 uppercase tracking-wider">
             Spotify Playlist URL or URI
@@ -148,6 +159,28 @@
         </div>
       </div>
 
+      <!-- Local Folder Input Group -->
+      <div id="srcFolderGroup" class="hidden flex flex-col md:flex-row gap-4 items-center justify-between relative z-10">
+        <div class="w-full flex-1">
+          <div class="flex items-center justify-between mb-1.5">
+            <label for="folderInput" class="block text-xs font-bold text-amber-400 uppercase tracking-wider">
+              Local Audio Directory (MP3, WAV, FLAC, M4A, AIFF)
+            </label>
+            <span class="text-[11px] text-spotify-muted font-mono hidden sm:inline">Auto-detects ID3 tags, BPM, Keys & Artwork</span>
+          </div>
+          <div class="flex gap-2">
+            <div class="relative flex-1">
+              <i class="fa-solid fa-folder-tree absolute left-3.5 top-1/2 -translate-y-1/2 text-amber-400 text-sm" aria-hidden="true"></i>
+              <input type="text" id="folderInput" placeholder="/Users/username/Music/My_DJ_Set or ~/Downloads/Folder" 
+                class="w-full bg-spotify-light border border-spotify-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-amber-400 transition shadow-inner font-mono text-xs">
+            </div>
+            <button onclick="loadFolder()" id="loadFolderBtn" class="bg-amber-500 hover:bg-amber-400 text-black font-bold px-5 md:px-6 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow-lg shadow-amber-500/20 shrink-0">
+              <i class="fa-solid fa-folder-open" aria-hidden="true"></i> <span>Scan & Load Folder</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Playlist Info Banner (Hidden until loaded) -->
       <div id="playlistBanner" class="hidden mt-5 pt-5 border-t border-spotify-border flex flex-col md:flex-row gap-5 items-center justify-between">
         <div class="flex items-center gap-4 w-full md:w-auto">
@@ -156,7 +189,7 @@
             <h2 id="playlistTitle" class="text-base md:text-lg font-bold text-white leading-tight truncate">Playlist Name</h2>
             <p id="playlistMeta" class="text-xs text-spotify-muted mt-0.5">0 tracks</p>
             <p id="playlistSavePath" class="text-[11px] text-spotify font-mono mt-1 flex items-center gap-1.5 truncate">
-              <i class="fa-solid fa-folder-open text-spotify" aria-hidden="true"></i> ~/Downloads/<span id="folderName"></span>
+              <i class="fa-solid fa-folder-open text-spotify" aria-hidden="true"></i> <span id="savePathDisplay">~/Downloads/<span id="folderName"></span></span>
             </p>
           </div>
         </div>
@@ -167,7 +200,7 @@
             <span class="font-medium text-neutral-300">Overall Progress</span>
             <div class="flex items-center gap-3">
               <div class="flex items-center gap-1">
-                <button onclick="reloadPlaylistFresh()" title="Re-fetch fresh playlist from Spotify & reset all state" class="px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60 rounded text-[11px] font-mono flex items-center gap-1 transition">
+                <button onclick="reloadPlaylistFresh()" id="bannerReloadBtn" title="Re-fetch fresh playlist from Spotify & reset all state" class="px-2 py-0.5 bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-700/60 rounded text-[11px] font-mono flex items-center gap-1 transition">
                   <i class="fa-solid fa-arrows-rotate text-cyan-400" aria-hidden="true"></i> Fresh Reload
                 </button>
                 <button onclick="resetPlaylist('all')" title="Reset entire playlist to start from beginning" class="px-2 py-0.5 bg-spotify-light hover:bg-spotify-card-hover text-neutral-300 border border-spotify-border rounded text-[11px] font-mono flex items-center gap-1 transition">
@@ -209,28 +242,43 @@
             </div>
           </div>
 
-          <!-- DJ Harmonic Sorter Control Bar -->
-          <div class="flex items-center justify-between bg-spotify-light/70 p-2 rounded-xl border border-spotify-border gap-2 text-xs">
-            <div class="flex items-center gap-1.5 min-w-0 flex-1">
-              <i class="fa-solid fa-wand-magic-sparkles text-amber-400 text-xs shrink-0" aria-hidden="true"></i>
-              <span class="font-bold text-[11px] text-white hidden sm:inline">DJ Mix Flow:</span>
-              <select id="djSortMode" class="bg-neutral-900 border border-spotify-border text-neutral-200 text-[11px] rounded-lg px-2 py-1 font-mono focus:border-spotify outline-none flex-1">
-                <option value="harmonic_flow">Harmonic Flow (Camelot ±1)</option>
-                <option value="bpm_climb">BPM Energy Climb</option>
-                <option value="camelot_ladder">Camelot Wheel Ladder</option>
-              </select>
+          <!-- DJ Harmonic Sorter Control & Action Bar -->
+          <div class="flex flex-col gap-2 bg-spotify-light/70 p-2.5 rounded-xl border border-spotify-border">
+            <div class="flex items-center justify-between gap-2 text-xs">
+              <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                <i class="fa-solid fa-wand-magic-sparkles text-amber-400 text-xs shrink-0" aria-hidden="true"></i>
+                <span class="font-bold text-[11px] text-white hidden sm:inline">DJ Mix Flow:</span>
+                <select id="djSortMode" class="bg-neutral-900 border border-spotify-border text-neutral-200 text-[11px] rounded-lg px-2 py-1 font-mono focus:border-spotify outline-none flex-1">
+                  <option value="harmonic_flow">Harmonic Flow (Camelot ±1)</option>
+                  <option value="bpm_climb">BPM Energy Climb</option>
+                  <option value="camelot_ladder">Camelot Wheel Ladder</option>
+                </select>
+              </div>
+              <button onclick="applyDjSort()" id="djSortBtn" title="Optimize and reorder playlist tracks for seamless harmonic DJ mixing" class="bg-amber-500 hover:bg-amber-400 text-black font-bold px-3 py-1 rounded-lg text-[11px] flex items-center gap-1 transition shadow-sm shrink-0">
+                <i class="fa-solid fa-arrow-down-short-wide" aria-hidden="true"></i> <span>DJ Sort</span>
+              </button>
             </div>
-            <button onclick="applyDjSort()" id="djSortBtn" title="Optimize and reorder playlist tracks for seamless harmonic DJ mixing" class="bg-amber-500 hover:bg-amber-400 text-black font-bold px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1 transition shadow-sm shrink-0">
-              <i class="fa-solid fa-arrow-down-short-wide" aria-hidden="true"></i> <span>DJ Sort</span>
-            </button>
+
+            <!-- Set & Folder File Operations (Renumber & Export M3U8) -->
+            <div class="flex items-center justify-between gap-2 pt-2 border-t border-white/5">
+              <span class="text-[10px] text-neutral-400 font-mono"><i class="fa-solid fa-sliders text-amber-400 mr-1" aria-hidden="true"></i>File & Set Tools:</span>
+              <div class="flex items-center gap-1.5">
+                <button onclick="renameFolderOrder()" id="renameOrderBtn" title="Physically renumber audio files on disk (01 -, 02 -) based on current DJ sequence" class="px-2 py-0.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 hover:border-amber-500/50 text-[10px] font-semibold flex items-center gap-1 transition shadow-sm">
+                  <i class="fa-solid fa-arrow-down-1-9 text-amber-400" aria-hidden="true"></i> <span>Renumber</span>
+                </button>
+                <button onclick="exportFolderM3u()" id="exportM3uBtn" title="Export .m3u8 playlist file for Rekordbox / Engine DJ / Traktor" class="px-2 py-0.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-cyan-300 border border-cyan-800/60 hover:border-cyan-500 text-[10px] font-semibold flex items-center gap-1 transition shadow-sm">
+                  <i class="fa-solid fa-file-audio text-cyan-400" aria-hidden="true"></i> <span>Export M3U8</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
         <div id="trackList" role="list" class="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5">
           <div class="h-full flex flex-col items-center justify-center text-spotify-muted text-xs text-center p-6 border border-dashed border-white/5 rounded-xl">
             <i class="fa-solid fa-music text-3xl mb-3 text-neutral-700" aria-hidden="true"></i>
-            <p class="font-medium text-neutral-400 mb-1">No playlist loaded</p>
-            <p class="text-[11px] text-neutral-500 max-w-xs">Paste a Spotify playlist URL above to inspect tracks, BPM, keys, and automated downloads.</p>
+            <p class="font-medium text-neutral-400 mb-1">No playlist or folder loaded</p>
+            <p class="text-[11px] text-neutral-500 max-w-xs">Paste a Spotify playlist URL or load a local audio folder above to inspect BPM, Camelot keys, and organize seamless DJ sets.</p>
           </div>
         </div>
       </section>
@@ -422,6 +470,14 @@
       if (playlistInput) {
         playlistInput.addEventListener("keydown", (e) => {
           if (e.key === "Enter") loadPlaylist();
+        });
+      }
+
+      // Enter on Folder Path
+      const folderInput = document.getElementById("folderInput");
+      if (folderInput) {
+        folderInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") loadFolder();
         });
       }
 
@@ -659,6 +715,142 @@
         }
       } catch (e) {
         console.error("Failed to fetch state:", e);
+      }
+    }
+
+    // Source Mode Tab Switching
+    function switchSourceTab(mode) {
+      const spotBtn = document.getElementById("srcTabSpotifyBtn");
+      const folderBtn = document.getElementById("srcTabFolderBtn");
+      const spotGroup = document.getElementById("srcSpotifyGroup");
+      const folderGroup = document.getElementById("srcFolderGroup");
+
+      if (mode === 'spotify') {
+        spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify text-black transition shadow-sm";
+        folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+        spotGroup.classList.remove("hidden");
+        folderGroup.classList.add("hidden");
+      } else {
+        folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 text-black transition shadow-sm";
+        spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+        folderGroup.classList.remove("hidden");
+        spotGroup.classList.add("hidden");
+        const folderInput = document.getElementById("folderInput");
+        if (folderInput) folderInput.focus();
+      }
+    }
+
+    async function loadFolder() {
+      const folderPath = document.getElementById("folderInput").value.trim();
+      if (!folderPath) {
+        alert("Please enter a valid local directory path.");
+        return;
+      }
+
+      const btn = document.getElementById("loadFolderBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Scanning audio...`;
+      }
+
+      try {
+        const res = await fetch("/api/folder/load", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder_path: folderPath })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Error scanning local directory.");
+        } else {
+          activeJob = data.job;
+          renderJob(activeJob);
+          appendLog(`📂 Local folder loaded: "${data.folder_name}" (${activeJob.tracks.length} tracks detected).`, "system");
+        }
+      } catch (e) {
+        alert("Request error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    async function renameFolderOrder() {
+      if (!activeJob || !activeJob.tracks || activeJob.tracks.length === 0) {
+        alert("Please load a folder or playlist first.");
+        return;
+      }
+
+      const confirmed = confirm(
+        `Are you sure you want to renumber ${activeJob.tracks.length} files in place (e.g. 01 - Artist - Title.mp3) matching the current DJ sorted order?\n\nThis will physically rename files in your audio folder.`
+      );
+      if (!confirmed) return;
+
+      const btn = document.getElementById("renameOrderBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-amber-400"></i> Renaming...`;
+      }
+
+      try {
+        const res = await fetch("/api/folder/rename-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Error renaming files.");
+        } else {
+          appendLog(`✓ Successfully renamed ${data.renamed_count} files on disk with sequence numbers!`, "success");
+          alert(`✓ Renamed ${data.renamed_count} audio files on disk (01 -, 02 -) according to DJ set flow!`);
+          fetchState();
+        }
+      } catch (e) {
+        alert("Rename error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    async function exportFolderM3u() {
+      if (!activeJob || !activeJob.tracks || activeJob.tracks.length === 0) {
+        alert("Please load a folder or playlist first.");
+        return;
+      }
+
+      const btn = document.getElementById("exportM3uBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-cyan-400"></i> Exporting...`;
+      }
+
+      try {
+        const res = await fetch("/api/folder/export-m3u", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Error exporting M3U8 playlist.");
+        } else {
+          appendLog(`📑 Exported DJ Playlist: ${data.m3u8_path}`, "success");
+          alert(`✓ Exported Playlist: ${data.filename}\n\nPath: ${data.m3u8_path}\n\nReady for Rekordbox / Engine DJ / Traktor / Serato.`);
+        }
+      } catch (e) {
+        alert("Export error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
       }
     }
 
@@ -910,11 +1102,29 @@
       // Banner
       const banner = document.getElementById("playlistBanner");
       banner.classList.remove("hidden");
+      const isFolder = job.playlist_id && job.playlist_id.startsWith("folder_");
+      
       document.getElementById("playlistTitle").innerText = job.playlist_name;
-      document.getElementById("playlistMeta").innerText = `${job.tracks.length} tracks • ${job.playlist_url}`;
-      document.getElementById("folderName").innerText = job.playlist_name;
+      document.getElementById("playlistMeta").innerText = `${job.tracks.length} tracks • ${isFolder ? 'Local Audio Directory' : job.playlist_url}`;
+      
+      const reloadBtn = document.getElementById("bannerReloadBtn");
+      if (reloadBtn) {
+        reloadBtn.style.display = isFolder ? "none" : "inline-flex";
+      }
+
+      const savePathEl = document.getElementById("savePathDisplay");
+      if (savePathEl) {
+        if (isFolder || (job.playlist_url && job.playlist_url.startsWith("/"))) {
+          savePathEl.innerHTML = `<span class="text-amber-400 font-semibold">${escapeHtml(job.playlist_url)}</span>`;
+        } else {
+          savePathEl.innerHTML = `~/Downloads/<span id="folderName">${escapeHtml(job.playlist_name)}</span>`;
+        }
+      }
+
       if (job.playlist_image) {
         document.getElementById("playlistCover").src = job.playlist_image;
+      } else if (isFolder) {
+        document.getElementById("playlistCover").src = "https://via.placeholder.com/64x64/222222/f59e0b?text=DJ+Folder";
       }
 
       // Stats
