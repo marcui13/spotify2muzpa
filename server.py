@@ -537,8 +537,21 @@ async def sort_playlist_dj(payload: Dict[str, Any] = None):
         raise HTTPException(status_code=400, detail="No active playlist job to sort.")
 
     from dj_sorter import optimize_dj_sequence, analyze_set_flow
+    from audio_analyzer import enrich_track_audio_features
 
-    # Reorder tracks
+    # 1. Ensure all tracks have BPM and Camelot Key before sorting
+    for t_state in orchestrator.current_job.tracks:
+        tr = t_state.spotify_track
+        if not tr.bpm or not tr.camelot_key:
+            local_p = None
+            if tr.spotify_url and tr.spotify_url.startswith("file://"):
+                local_p = Path(tr.spotify_url.replace("file://", ""))
+            try:
+                enrich_track_audio_features(tr, local_path=local_p)
+            except Exception as e:
+                logger.debug(f"Feature enrichment notice for '{tr.title}': {e}")
+
+    # 2. Reorder tracks
     sorted_tracks = optimize_dj_sequence(
         tracks=orchestrator.current_job.tracks,
         start_track_id=start_track_id,
@@ -561,6 +574,41 @@ async def sort_playlist_dj(payload: Dict[str, Any] = None):
         "status": "sorted",
         "mode": mode,
         "analysis": analysis,
+        "job": orchestrator.current_job.model_dump()
+    }
+
+
+@app.post("/api/playlist/enrich-features")
+async def enrich_playlist_features():
+    """Analyzes and enriches BPM and harmonic keys for all tracks in the active playlist / folder."""
+    if not orchestrator.current_job:
+        raise HTTPException(status_code=400, detail="No active playlist or folder loaded.")
+
+    from audio_analyzer import enrich_track_audio_features
+    updated_count = 0
+    for t_state in orchestrator.current_job.tracks:
+        tr = t_state.spotify_track
+        local_p = None
+        if tr.spotify_url and tr.spotify_url.startswith("file://"):
+            local_p = Path(tr.spotify_url.replace("file://", ""))
+        try:
+            changed = enrich_track_audio_features(tr, local_path=local_p)
+            if changed:
+                updated_count += 1
+        except Exception as e:
+            logger.debug(f"Enrichment notice for '{tr.title}': {e}")
+
+    StateManager.save_job(orchestrator.current_job)
+    await manager.broadcast({
+        "type": "state_updated",
+        "data": orchestrator.current_job.model_dump(),
+        "queue_summary": orchestrator.download_queue.get_status_summary(orchestrator.current_job)
+    })
+
+    return {
+        "status": "success",
+        "updated_count": updated_count,
+        "total_tracks": len(orchestrator.current_job.tracks),
         "job": orchestrator.current_job.model_dump()
     }
 

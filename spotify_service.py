@@ -125,6 +125,7 @@ class SpotifyService:
             )
             tracks.append(track_obj)
 
+        self.enrich_tracks_with_audio_features(tracks)
         logger.info(f"Embed parser successfully loaded '{playlist_name}' with {len(tracks)} tracks.")
         return playlist_name, playlist_image, tracks
 
@@ -178,38 +179,46 @@ class SpotifyService:
         return self.fetch_playlist_via_embed(playlist_id)
 
     def enrich_tracks_with_audio_features(self, tracks: List[SpotifyTrack]) -> None:
-        """Fetches BPM, Musical Key, and Camelot signature for tracks via Spotify Audio Features."""
-        if not self._sp or not tracks:
+        """Fetches BPM, Musical Key, and Camelot signature for tracks via Spotify Audio Features + Multi-source Fallback."""
+        if not tracks:
             return
 
-        from audio_analyzer import pitch_and_mode_to_key
+        from audio_analyzer import pitch_and_mode_to_key, enrich_track_audio_features
 
-        valid_tracks = [t for t in tracks if t.id and not t.id.startswith("track_")]
-        if not valid_tracks:
-            return
-
-        try:
-            for i in range(0, len(valid_tracks), 100):
-                chunk = valid_tracks[i:i+100]
-                chunk_ids = [t.id for t in chunk]
-                features_list = self._sp.audio_features(chunk_ids)
-                if not features_list:
-                    continue
-
-                for feat in features_list:
-                    if not feat:
+        # 1. Try Spotify Official API audio_features if client initialized
+        if self._sp:
+            valid_tracks = [t for t in tracks if t.id and not t.id.startswith("track_")]
+            try:
+                for i in range(0, len(valid_tracks), 100):
+                    chunk = valid_tracks[i:i+100]
+                    chunk_ids = [t.id for t in chunk]
+                    features_list = self._sp.audio_features(chunk_ids)
+                    if not features_list:
                         continue
-                    t_id = feat.get("id")
-                    target = next((t for t in chunk if t.id == t_id), None)
-                    if target:
-                        raw_tempo = feat.get("tempo")
-                        if raw_tempo:
-                            target.bpm = int(round(raw_tempo))
-                        
-                        mus_key, cam_key = pitch_and_mode_to_key(feat.get("key"), feat.get("mode"))
-                        target.musical_key = mus_key
-                        target.camelot_key = cam_key
-                        target.energy = feat.get("energy")
-                        target.danceability = feat.get("danceability")
-        except Exception as e:
-            logger.debug(f"Audio features enrichment notice: {e}")
+
+                    for feat in features_list:
+                        if not feat:
+                            continue
+                        t_id = feat.get("id")
+                        target = next((t for t in chunk if t.id == t_id), None)
+                        if target:
+                            raw_tempo = feat.get("tempo")
+                            if raw_tempo:
+                                target.bpm = int(round(raw_tempo))
+                            
+                            mus_key, cam_key = pitch_and_mode_to_key(feat.get("key"), feat.get("mode"))
+                            target.musical_key = mus_key
+                            target.camelot_key = cam_key
+                            target.energy = feat.get("energy")
+                            target.danceability = feat.get("danceability")
+            except Exception as e:
+                logger.debug(f"Official audio features API notice: {e}")
+
+        # 2. Multi-source fallback (Deezer API / Preview acoustic analysis / Filename / Cache) for any track missing BPM or Key
+        for t in tracks:
+            if not t.bpm or not t.camelot_key:
+                try:
+                    enrich_track_audio_features(t, allow_network=True)
+                except Exception as ex:
+                    logger.debug(f"Audio enrichment notice for '{t.title}': {ex}")
+

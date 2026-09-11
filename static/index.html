@@ -254,6 +254,9 @@
                   <option value="camelot_ladder">Camelot Wheel Ladder</option>
                 </select>
               </div>
+              <button onclick="detectBpmAndKeys()" id="detectBpmBtn" title="Analyze waveform & online databases for BPM and harmonic keys for all tracks" class="bg-spotify-light hover:bg-spotify-card-hover text-amber-300 border border-amber-500/40 font-bold px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1 transition shadow-sm shrink-0">
+                <i class="fa-solid fa-bolt text-amber-400" aria-hidden="true"></i> <span class="hidden sm:inline">Detect Keys & BPM</span><span class="sm:hidden">Detect</span>
+              </button>
               <button onclick="applyDjSort()" id="djSortBtn" title="Optimize and reorder playlist tracks for seamless harmonic DJ mixing" class="bg-amber-500 hover:bg-amber-400 text-black font-bold px-3 py-1 rounded-lg text-[11px] flex items-center gap-1 transition shadow-sm shrink-0">
                 <i class="fa-solid fa-arrow-down-short-wide" aria-hidden="true"></i> <span>DJ Sort</span>
               </button>
@@ -900,6 +903,43 @@
       await loadPlaylist(true);
     }
 
+    async function detectBpmAndKeys() {
+      if (!activeJob || !activeJob.tracks || activeJob.tracks.length === 0) {
+        alert("Please load a playlist or local folder first.");
+        return;
+      }
+
+      const btn = document.getElementById("detectBpmBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-amber-400"></i> Analyzing...`;
+      }
+
+      try {
+        appendLog("⚡ Analyzing track waveforms and music databases for BPM and harmonic keys...", "system");
+        const res = await fetch("/api/playlist/enrich-features", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Error detecting audio features.");
+        } else {
+          activeJob = data.job;
+          renderJob(activeJob);
+          appendLog(`✓ Analysis complete: Updated ${data.updated_count} of ${data.total_tracks} tracks with BPM & harmonic keys!`, "success");
+        }
+      } catch (e) {
+        alert("Detection error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
     async function applyDjSort(startTrackId, event) {
       if (event) event.stopPropagation();
       if (!activeJob || !activeJob.tracks || activeJob.tracks.length === 0) {
@@ -1288,8 +1328,8 @@
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
-            ${tr.bpm ? `<span class="text-[9px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-1.5 py-0.5 rounded" title="BPM"><i class="fa-solid fa-gauge text-[8px] mr-0.5" aria-hidden="true"></i>${tr.bpm}</span>` : ''}
-            ${tr.camelot_key ? `<span class="text-[9px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5" aria-hidden="true"></i>${tr.camelot_key}</span>` : ''}
+            ${tr.bpm ? `<span class="text-[9px] font-mono font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-700/60 px-1.5 py-0.5 rounded shadow-sm" title="Tempo: ${tr.bpm} BPM"><i class="fa-solid fa-gauge text-[8px] mr-0.5 text-cyan-400" aria-hidden="true"></i>${tr.bpm}</span>` : '<span class="text-[8px] font-mono text-neutral-600 bg-neutral-900/60 border border-white/5 px-1 py-0.5 rounded" title="BPM not detected">-- BPM</span>'}
+            ${tr.camelot_key ? `<span class="text-[9px] font-mono font-bold text-amber-300 bg-amber-950/80 border border-amber-700/60 px-1.5 py-0.5 rounded shadow-sm" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5 text-amber-400" aria-hidden="true"></i>${tr.camelot_key}</span>` : '<span class="text-[8px] font-mono text-neutral-600 bg-neutral-900/60 border border-white/5 px-1 py-0.5 rounded" title="Key not detected">-- Key</span>'}
             <span class="text-[10px] font-mono text-neutral-500">${tr.duration_str}</span>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full ${statusClass}">${statusIcon}${t.status}</span>
             <button onclick="applyDjSort('${tr.id}', event)" title="Harmonically sort playlist starting from this track as opener" aria-label="Start DJ set from ${escapeHtml(tr.title)}" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-amber-400 p-1 rounded text-xs transition">

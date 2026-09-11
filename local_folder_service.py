@@ -171,7 +171,7 @@ def extract_audio_file_metadata(file_path: Path) -> SpotifyTrack:
 
     track_id = f"local_{abs(hash(str(file_path)))}"
 
-    return SpotifyTrack(
+    track = SpotifyTrack(
         id=track_id,
         title=title,
         artist=artist,
@@ -184,6 +184,14 @@ def extract_audio_file_metadata(file_path: Path) -> SpotifyTrack:
         camelot_key=camelot_key,
         spotify_url=f"file://{file_path.resolve()}"
     )
+
+    from audio_analyzer import enrich_track_audio_features
+    try:
+        enrich_track_audio_features(track, local_path=file_path)
+    except Exception as e:
+        logger.debug(f"Audio features enrichment notice for '{file_path.name}': {e}")
+
+    return track
 
 
 def scan_folder_tracks(folder_path: str) -> Tuple[str, List[TrackState]]:
