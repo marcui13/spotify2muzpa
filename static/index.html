@@ -133,7 +133,10 @@
           <i class="fa-brands fa-spotify text-sm" aria-hidden="true"></i> <span>Spotify Playlist</span>
         </button>
         <button id="srcTabFolderBtn" onclick="switchSourceTab('folder')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
-          <i class="fa-solid fa-folder-open text-amber-400 text-sm" aria-hidden="true"></i> <span>Local Audio Folder (DJ Set)</span>
+          <i class="fa-solid fa-folder-open text-amber-400 text-sm" aria-hidden="true"></i> <span>Local Audio Folder</span>
+        </button>
+        <button id="srcTabDjSetBtn" onclick="switchSourceTab('djset')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
+          <i class="fa-solid fa-compact-disc text-emerald-400 text-sm" aria-hidden="true"></i> <span>DJ Set Link (YouTube / SoundCloud)</span>
         </button>
       </div>
 
@@ -177,6 +180,90 @@
             <button onclick="loadFolder()" id="loadFolderBtn" class="bg-amber-500 hover:bg-amber-400 text-black font-bold px-5 md:px-6 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow-lg shadow-amber-500/20 shrink-0">
               <i class="fa-solid fa-folder-open" aria-hidden="true"></i> <span>Scan & Load Folder</span>
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- DJ Set Input Group -->
+      <div id="srcDjSetGroup" class="hidden flex flex-col gap-4 relative z-10">
+        <div class="w-full flex-1">
+          <div class="flex items-center justify-between mb-1.5">
+            <label for="djSetInput" class="block text-xs font-bold text-emerald-400 uppercase tracking-wider">
+              YouTube or SoundCloud DJ Set URL
+            </label>
+            <span class="text-[11px] text-spotify-muted font-mono hidden sm:inline">Auto-detects chapters, description tracklists & Shazam audio fingerprinting</span>
+          </div>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <div class="relative flex-1">
+              <i class="fa-solid fa-compact-disc absolute left-3.5 top-1/2 -translate-y-1/2 text-emerald-400 text-sm" aria-hidden="true"></i>
+              <input type="text" id="djSetInput" placeholder="https://www.youtube.com/watch?v=... or https://soundcloud.com/..." 
+                class="w-full bg-spotify-light border border-spotify-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-emerald-400 transition shadow-inner font-mono text-xs">
+            </div>
+            <button onclick="startDjSetAnalysis()" id="analyzeDjSetBtn" class="bg-emerald-500 hover:bg-emerald-400 text-black font-bold px-5 md:px-6 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 shrink-0">
+              <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>Identify Tracklist</span>
+            </button>
+          </div>
+          <div class="flex items-center gap-4 mt-2.5 text-xs text-neutral-400">
+            <label class="flex items-center gap-1.5 cursor-pointer hover:text-white transition">
+              <input type="checkbox" id="forceAcousticCheck" class="rounded accent-emerald-500">
+              <span>Force Acoustic Scan (Shazam)</span>
+            </label>
+            <span class="text-neutral-600">|</span>
+            <span class="text-[11px] text-neutral-400"><i class="fa-solid fa-bolt text-amber-400 mr-1"></i>100% Local, Free & Unlimited</span>
+          </div>
+        </div>
+
+        <!-- DJ Set Live Analysis / Result Container -->
+        <div id="djSetLiveContainer" class="hidden mt-1 p-4 rounded-2xl bg-neutral-950/80 border border-spotify-border flex flex-col gap-4">
+          <!-- Header Info & Progress -->
+          <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between border-b border-spotify-border/60 pb-3">
+            <div class="flex items-center gap-3">
+              <img id="djSetThumbnail" src="" class="w-12 h-12 rounded-lg object-cover bg-neutral-900 border border-spotify-border hidden">
+              <div>
+                <h3 id="djSetTitle" class="text-sm font-bold text-white leading-tight">Analyzing DJ Set...</h3>
+                <p id="djSetMeta" class="text-xs text-spotify-muted font-mono mt-0.5">Initializing audio extractor...</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <button onclick="cancelDjSetAnalysis()" id="cancelDjSetBtn" class="hidden px-3 py-1.5 rounded-lg border border-red-500/40 text-red-400 hover:bg-red-500/10 text-xs font-semibold transition">
+                <i class="fa-solid fa-xmark mr-1"></i> Cancel
+              </button>
+            </div>
+          </div>
+
+          <!-- Progress Bar -->
+          <div id="djSetProgressWrap" class="flex flex-col gap-1.5">
+            <div class="flex justify-between text-xs font-mono">
+              <span id="djSetStatusText" class="text-emerald-400">Extracting chapters and metadata...</span>
+              <span id="djSetPercent" class="text-neutral-400 font-bold">0%</span>
+            </div>
+            <div class="w-full bg-neutral-800 h-2 rounded-full overflow-hidden">
+              <div id="djSetProgressBar" class="bg-emerald-500 h-full w-0 transition-all duration-300 rounded-full"></div>
+            </div>
+          </div>
+
+          <!-- Identified Tracks List -->
+          <div id="djSetTracksWrap" class="hidden flex flex-col gap-3">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <span class="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                <i class="fa-solid fa-list-ol text-emerald-400"></i> Identified Tracklist (<span id="djSetTrackCount">0</span> tracks)
+              </span>
+              <div class="flex items-center flex-wrap gap-2">
+                <button onclick="copyDjSetTracklist()" class="px-3 py-1.5 rounded-lg bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-xs font-semibold text-neutral-200 transition flex items-center gap-1.5">
+                  <i class="fa-solid fa-copy"></i> Copy Text
+                </button>
+                <button onclick="exportDjSetToSpotify()" id="exportSpotifyBtn" class="px-3 py-1.5 rounded-lg bg-[#1DB954]/20 hover:bg-[#1DB954]/30 border border-[#1DB954]/40 text-emerald-300 text-xs font-semibold transition flex items-center gap-1.5">
+                  <i class="fa-brands fa-spotify text-emerald-400"></i> Export to Spotify
+                </button>
+                <button onclick="sendDjSetToMuzpa()" id="djSetToMuzpaBtn" class="px-4 py-1.5 rounded-lg bg-spotify hover:bg-spotify-hover text-black text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-spotify/20">
+                  <i class="fa-solid fa-cloud-arrow-down"></i> Download in Muzpa
+                </button>
+              </div>
+            </div>
+
+            <div class="max-h-72 overflow-y-auto rounded-xl border border-spotify-border bg-neutral-900/60 p-2 divide-y divide-white/5" id="djSetTracksList">
+              <!-- Rendered dynamically -->
+            </div>
           </div>
         </div>
       </div>
@@ -691,6 +778,12 @@
           renderActiveDownloads(msg.queue_summary);
         }
         fetchState();
+      } else if (msg.type === "djset_progress") {
+        updateDjSetProgress(msg.data);
+      } else if (msg.type === "djset_complete") {
+        handleDjSetComplete(msg.data);
+      } else if (msg.type === "djset_error") {
+        handleDjSetError(msg.data);
       }
     }
 
@@ -722,24 +815,279 @@
     }
 
     // Source Mode Tab Switching
+    let activeDjSetJob = null;
+
     function switchSourceTab(mode) {
       const spotBtn = document.getElementById("srcTabSpotifyBtn");
       const folderBtn = document.getElementById("srcTabFolderBtn");
+      const djSetBtn = document.getElementById("srcTabDjSetBtn");
       const spotGroup = document.getElementById("srcSpotifyGroup");
       const folderGroup = document.getElementById("srcFolderGroup");
+      const djSetGroup = document.getElementById("srcDjSetGroup");
+
+      // Reset tabs
+      spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+      folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+      if (djSetBtn) djSetBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+
+      spotGroup.classList.add("hidden");
+      folderGroup.classList.add("hidden");
+      if (djSetGroup) djSetGroup.classList.add("hidden");
 
       if (mode === 'spotify') {
         spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify text-black transition shadow-sm";
-        folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
         spotGroup.classList.remove("hidden");
-        folderGroup.classList.add("hidden");
-      } else {
+      } else if (mode === 'folder') {
         folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 text-black transition shadow-sm";
-        spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
         folderGroup.classList.remove("hidden");
-        spotGroup.classList.add("hidden");
         const folderInput = document.getElementById("folderInput");
         if (folderInput) folderInput.focus();
+      } else if (mode === 'djset') {
+        if (djSetBtn) djSetBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 text-black transition shadow-sm";
+        if (djSetGroup) djSetGroup.classList.remove("hidden");
+        const djSetInput = document.getElementById("djSetInput");
+        if (djSetInput) djSetInput.focus();
+      }
+    }
+
+    async function startDjSetAnalysis() {
+      const input = document.getElementById("djSetInput");
+      const url = input ? input.value.trim() : "";
+      if (!url) {
+        alert("Please enter a valid YouTube or SoundCloud DJ set URL.");
+        return;
+      }
+
+      const forceAcoustic = document.getElementById("forceAcousticCheck").checked;
+      const btn = document.getElementById("analyzeDjSetBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Initializing...`;
+      }
+
+      const liveContainer = document.getElementById("djSetLiveContainer");
+      liveContainer.classList.remove("hidden");
+      document.getElementById("cancelDjSetBtn").classList.remove("hidden");
+      document.getElementById("djSetTracksWrap").classList.add("hidden");
+      document.getElementById("djSetTitle").innerText = "Analyzing DJ Set...";
+      document.getElementById("djSetMeta").innerText = url;
+      document.getElementById("djSetStatusText").innerText = "Extracting chapters & description...";
+      document.getElementById("djSetStatusText").className = "text-emerald-400";
+      document.getElementById("djSetProgressBar").style.width = "10%";
+      document.getElementById("djSetPercent").innerText = "10%";
+
+      try {
+        const res = await fetch("/api/djset/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: url,
+            force_acoustic: forceAcoustic,
+            sample_interval: 90
+          })
+        });
+        const data = await res.json();
+        if (data.status === "started") {
+          activeDjSetJob = data.job;
+        } else {
+          alert(data.detail || "Failed to start DJ set analysis.");
+          if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+        }
+      } catch (e) {
+        alert("Error: " + e.message);
+        if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+      }
+    }
+
+    async function cancelDjSetAnalysis() {
+      if (activeDjSetJob && activeDjSetJob.job_id) {
+        try {
+          await fetch(`/api/djset/cancel/${activeDjSetJob.job_id}`, { method: "POST" });
+        } catch (e) {}
+      }
+      document.getElementById("djSetStatusText").innerText = "Analysis cancelled.";
+      const btn = document.getElementById("analyzeDjSetBtn");
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <span>Identify Tracklist</span>`;
+      }
+      document.getElementById("cancelDjSetBtn").classList.add("hidden");
+    }
+
+    function updateDjSetProgress(info) {
+      if (info.status_text) {
+        document.getElementById("djSetStatusText").innerText = info.status_text;
+      }
+      if (info.percent !== undefined) {
+        const pct = Math.min(100, Math.max(0, info.percent));
+        document.getElementById("djSetProgressBar").style.width = `${pct}%`;
+        document.getElementById("djSetPercent").innerText = `${pct}%`;
+      }
+    }
+
+    function handleDjSetComplete(job) {
+      activeDjSetJob = job;
+      const btn = document.getElementById("analyzeDjSetBtn");
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <span>Identify Tracklist</span>`;
+      }
+      document.getElementById("cancelDjSetBtn").classList.add("hidden");
+      document.getElementById("djSetTitle").innerText = job.title || "DJ Set Identified";
+      document.getElementById("djSetMeta").innerText = `${job.uploader || ''} • ${job.duration_str || ''} • ${job.tracks.length} tracks found`;
+      
+      const thumb = document.getElementById("djSetThumbnail");
+      if (job.thumbnail) {
+        thumb.src = job.thumbnail;
+        thumb.classList.remove("hidden");
+      }
+
+      document.getElementById("djSetProgressBar").style.width = "100%";
+      document.getElementById("djSetPercent").innerText = "100%";
+      document.getElementById("djSetStatusText").innerText = `✓ Complete! ${job.tracks.length} tracks identified.`;
+
+      renderDjSetTracks(job.tracks);
+    }
+
+    function handleDjSetError(data) {
+      const btn = document.getElementById("analyzeDjSetBtn");
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <span>Identify Tracklist</span>`;
+      }
+      document.getElementById("cancelDjSetBtn").classList.add("hidden");
+      document.getElementById("djSetStatusText").innerText = `Error: ${data.error || 'Failed to analyze set.'}`;
+      document.getElementById("djSetStatusText").className = "text-rose-400 font-mono";
+    }
+
+    function renderDjSetTracks(tracks) {
+      const wrap = document.getElementById("djSetTracksWrap");
+      wrap.classList.remove("hidden");
+      document.getElementById("djSetTrackCount").innerText = tracks.length;
+
+      const list = document.getElementById("djSetTracksList");
+      list.innerHTML = "";
+
+      if (!tracks || tracks.length === 0) {
+        list.innerHTML = `<p class="text-xs text-neutral-500 p-4 text-center">No tracks identified in this DJ set.</p>`;
+        return;
+      }
+
+      tracks.forEach((t, idx) => {
+        const itemEl = document.createElement("div");
+        itemEl.className = "flex items-center justify-between p-2.5 hover:bg-white/[0.02] transition rounded-lg gap-3";
+
+        const hasSpotify = !!t.spotify_id;
+        const bpmBadge = t.bpm ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-neutral-800 text-neutral-300 border border-neutral-700">${t.bpm} BPM</span>` : '';
+        const camelotBadge = t.camelot_key ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30">${t.camelot_key}</span>` : '';
+        const spotifyBadge = hasSpotify 
+          ? `<a href="${t.spotify_url}" target="_blank" rel="noopener noreferrer" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition flex items-center gap-1"><i class="fa-brands fa-spotify"></i> Spotify</a>` 
+          : `<span class="px-2 py-0.5 rounded text-[10px] font-mono text-neutral-500 bg-neutral-800/60">Unmatched</span>`;
+
+        const timeStr = t.end_timestamp ? `${t.timestamp} – ${t.end_timestamp}` : t.timestamp;
+
+        itemEl.innerHTML = `
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <span class="font-mono text-xs text-emerald-400 font-bold shrink-0 w-28">${timeStr}</span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold text-white truncate">${escapeHtml(t.artist)} <span class="font-normal text-neutral-400">— ${escapeHtml(t.title)}</span></p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            ${bpmBadge}
+            ${camelotBadge}
+            ${spotifyBadge}
+            <button onclick="removeDjSetTrack(${idx})" title="Remove track" class="text-neutral-500 hover:text-rose-400 p-1 transition text-xs">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+        `;
+        list.appendChild(itemEl);
+      });
+    }
+
+    function removeDjSetTrack(idx) {
+      if (activeDjSetJob && activeDjSetJob.tracks) {
+        activeDjSetJob.tracks.splice(idx, 1);
+        renderDjSetTracks(activeDjSetJob.tracks);
+      }
+    }
+
+    function copyDjSetTracklist() {
+      if (!activeDjSetJob || !activeDjSetJob.tracks || activeDjSetJob.tracks.length === 0) return;
+      const text = activeDjSetJob.tracks.map(t => {
+        const time = t.end_timestamp ? `${t.timestamp} – ${t.end_timestamp}` : t.timestamp;
+        return `${time} ${t.artist} - ${t.title}`;
+      }).join("\n");
+      navigator.clipboard.writeText(text).then(() => {
+        alert("✓ Tracklist copied to clipboard!");
+      });
+    }
+
+    async function exportDjSetToSpotify() {
+      if (!activeDjSetJob) return;
+      try {
+        const res = await fetch("/api/djset/export-spotify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: activeDjSetJob.job_id })
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          alert(`✓ Found ${data.matched_tracks} tracks matching on Spotify! Ready to download.`);
+        } else {
+          alert(data.message || "Spotify export ready.");
+        }
+      } catch (e) {
+        alert("Export error: " + e.message);
+      }
+    }
+
+    async function sendDjSetToMuzpa() {
+      if (!activeDjSetJob || !activeDjSetJob.tracks || activeDjSetJob.tracks.length === 0) {
+        alert("No tracks to download.");
+        return;
+      }
+
+      const btn = document.getElementById("djSetToMuzpaBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Converting...`;
+      }
+
+      try {
+        const autoMode = document.getElementById("autoModeToggle") ? document.getElementById("autoModeToggle").checked : false;
+        const threshold = parseFloat(document.getElementById("thresholdSlider") ? document.getElementById("thresholdSlider").value : 75);
+
+        const res = await fetch("/api/djset/to-playlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: activeDjSetJob.job_id,
+            playlist_name: activeDjSetJob.title,
+            auto_mode: autoMode,
+            similarity_threshold: threshold
+          })
+        });
+        const data = await res.json();
+        if (data.status === "success") {
+          // Switch tab back to active playlist view and render!
+          activeJob = data.job;
+          renderJob(activeJob);
+          // Scroll smoothly to the review table
+          document.getElementById("playlistBanner").scrollIntoView({ behavior: 'smooth' });
+        } else {
+          alert("Failed to start Muzpa downloads: " + (data.detail || "Unknown error"));
+        }
+      } catch (e) {
+        alert("Error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
       }
     }
 

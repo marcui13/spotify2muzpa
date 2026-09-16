@@ -104,3 +104,51 @@ class ConfigUpdateRequest(BaseModel):
     auto_mode: Optional[bool] = None
     similarity_threshold: Optional[float] = None
     rate_limit_delay: Optional[float] = None
+
+
+class DJSetTrackItem(BaseModel):
+    id: str = Field(description="Track candidate identifier or index")
+    timestamp: str = Field(description="Start timestamp in set (HH:MM:SS or MM:SS)")
+    end_timestamp: Optional[str] = Field(default=None, description="End timestamp in set")
+    artist: str = Field(description="Artist name")
+    title: str = Field(description="Track title")
+    confidence: Optional[str] = Field(default="high", description="Source or confidence e.g. chapter, description, acoustic")
+    spotify_id: Optional[str] = Field(default=None, description="Matched Spotify Track ID")
+    spotify_url: Optional[str] = Field(default=None, description="Spotify Track URL")
+    image_url: Optional[str] = Field(default=None, description="Album artwork URL")
+    duration_ms: int = Field(default=0, description="Duration in ms")
+    duration_str: str = Field(default="0:00", description="Formatted duration MM:SS")
+    bpm: Optional[int] = Field(default=None, description="Tempo in BPM")
+    musical_key: Optional[str] = Field(default=None, description="Musical key e.g. A Minor")
+    camelot_key: Optional[str] = Field(default=None, description="Camelot key e.g. 8A, 11B")
+    preview_url: Optional[str] = Field(default=None, description="30s preview URL")
+
+
+class DJSetJob(BaseModel):
+    job_id: str
+    source_url: str
+    title: str = Field(default="DJ Set")
+    uploader: Optional[str] = None
+    duration_seconds: int = Field(default=0)
+    duration_str: str = Field(default="0:00")
+    thumbnail: Optional[str] = None
+    status: str = Field(default="pending", description="pending, extracting_info, downloading_audio, analyzing, complete, error, cancelled")
+    progress: Dict[str, Any] = Field(default_factory=lambda: {"current": 0, "total": 0, "percent": 0, "eta": ""})
+    tracks: List[DJSetTrackItem] = Field(default_factory=list)
+    error_message: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class DJSetAnalyzeRequest(BaseModel):
+    url: str
+    sample_interval: int = Field(default=90, description="Interval in seconds between acoustic samples")
+    snippet_duration: int = Field(default=12, description="Duration of snippet in seconds to fingerprint")
+    force_acoustic: bool = Field(default=False, description="Force acoustic fingerprinting even if description/chapters exist")
+
+
+class DJSetToPlaylistRequest(BaseModel):
+    job_id: str
+    playlist_name: Optional[str] = None
+    selected_indices: Optional[List[int]] = None
+    auto_mode: bool = Field(default=False)
+    similarity_threshold: float = Field(default=75.0)

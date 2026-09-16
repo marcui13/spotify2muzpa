@@ -27,8 +27,13 @@ from models import (
     PlaylistJob,
     DecisionRequest,
     ConfigUpdateRequest,
+    DJSetTrackItem,
+    DJSetJob,
+    DJSetAnalyzeRequest,
+    DJSetToPlaylistRequest,
 )
 from spotify_service import SpotifyService
+from dj_set_service import DJSetService
 from muzpa_crawler import MuzpaCrawlerEngine, detect_available_browsers
 from downloader import MuzpaDownloader, StateManager, DownloadQueueManager
 
@@ -310,6 +315,7 @@ class DownloadOrchestrator:
 
 orchestrator = DownloadOrchestrator()
 spotify_service = SpotifyService()
+dj_set_service = DJSetService(spotify_service)
 
 
 @asynccontextmanager
@@ -845,6 +851,120 @@ async def update_config(req: ConfigUpdateRequest):
         StateManager.save_job(orchestrator.current_job)
         await manager.broadcast({"type": "config_updated", "data": orchestrator.current_job.model_dump()})
     return {"status": "updated"}
+
+
+# -------------------------------------------------------------
+# DJ Set Tracklist Identifier Endpoints
+# -------------------------------------------------------------
+
+@app.post("/api/djset/analyze")
+async def analyze_dj_set(payload: DJSetAnalyzeRequest):
+    """Starts asynchronous DJ set analysis for a YouTube/SoundCloud URL or local set."""
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'url' in request.")
+
+    yt_or_sc = bool(re.search(r"(youtube\.com|youtu\.be|soundcloud\.com)", url, re.IGNORECASE))
+    if not yt_or_sc and not os.path.exists(url):
+        raise HTTPException(status_code=400, detail="URL must be a valid YouTube, SoundCloud link or local audio file.")
+
+    async def _progress_callback(info: Dict[str, Any]):
+        await manager.broadcast({"type": "djset_progress", "data": info})
+
+    # Run analysis in background task
+    async def _run_analysis():
+        try:
+            job = await dj_set_service.analyze_dj_set(
+                url=url,
+                sample_interval=payload.sample_interval,
+                snippet_duration=payload.snippet_duration,
+                force_acoustic=payload.force_acoustic,
+                on_progress_callback=lambda p: asyncio.create_task(_progress_callback(p))
+            )
+            await manager.broadcast({
+                "type": "djset_complete",
+                "data": job.model_dump()
+            })
+        except Exception as ex:
+            logger.error(f"Background DJ set analysis error: {ex}")
+            await manager.broadcast({
+                "type": "djset_error",
+                "data": {"error": str(ex)}
+            })
+
+    temp_id = f"djset_{uuid.uuid4().hex[:10]}"
+    initial_job = DJSetJob(job_id=temp_id, source_url=url, status="extracting_info")
+    dj_set_service.active_jobs[temp_id] = initial_job
+
+    asyncio.create_task(_run_analysis())
+    return {"status": "started", "job_id": temp_id, "job": initial_job.model_dump()}
+
+
+@app.get("/api/djset/status/{job_id}")
+async def get_dj_set_status(job_id: str):
+    """Returns the current status and detected tracks of a DJ set analysis job."""
+    job = dj_set_service.active_jobs.get(job_id)
+    if not job:
+        for j in dj_set_service.active_jobs.values():
+            if j.job_id == job_id or j.source_url == job_id:
+                job = j
+                break
+    if not job:
+        if dj_set_service.active_jobs:
+            job = list(dj_set_service.active_jobs.values())[-1]
+        else:
+            raise HTTPException(status_code=404, detail="DJ Set job not found.")
+    return {"status": "success", "job": job.model_dump()}
+
+
+@app.post("/api/djset/cancel/{job_id}")
+async def cancel_dj_set(job_id: str):
+    """Cancels an ongoing DJ set analysis job."""
+    cancelled = dj_set_service.cancel_job(job_id)
+    return {"status": "success", "cancelled": cancelled}
+
+
+@app.post("/api/djset/to-playlist")
+async def dj_set_to_playlist(payload: DJSetToPlaylistRequest):
+    """Converts analyzed DJ set tracklist into an active PlaylistJob and begins Muzpa crawling."""
+    try:
+        target_id = payload.job_id
+        if target_id not in dj_set_service.active_jobs and dj_set_service.active_jobs:
+            target_id = list(dj_set_service.active_jobs.keys())[-1]
+
+        playlist_job = dj_set_service.convert_to_playlist_job(
+            job_id=target_id,
+            playlist_name=payload.playlist_name,
+            selected_indices=payload.selected_indices,
+            auto_mode=payload.auto_mode,
+            similarity_threshold=payload.similarity_threshold
+        )
+    except Exception as e:
+        logger.error(f"Failed to convert DJ Set to playlist: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    await orchestrator.start_job(playlist_job)
+    return {"status": "success", "job": playlist_job.model_dump()}
+
+
+@app.post("/api/djset/export-spotify")
+async def export_dj_set_to_spotify(payload: Dict[str, Any]):
+    """Prepares tracks for Spotify playlist export or returns track URIs."""
+    job_id = payload.get("job_id")
+    target_id = job_id if job_id in dj_set_service.active_jobs else (list(dj_set_service.active_jobs.keys())[-1] if dj_set_service.active_jobs else None)
+    if not target_id:
+        raise HTTPException(status_code=404, detail="No DJ set job found.")
+
+    job = dj_set_service.active_jobs[target_id]
+    matched_ids = [f"spotify:track:{t.spotify_id}" for t in job.tracks if t.spotify_id]
+
+    return {
+        "status": "success",
+        "matched_tracks": len(matched_ids),
+        "total_tracks": len(job.tracks),
+        "track_uris": matched_ids,
+        "playlist_name": job.title
+    }
 
 
 # Mount static frontend

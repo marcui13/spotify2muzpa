@@ -16,3 +16,6 @@ pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pyinstaller>=6.0.0
 pywebview>=5.0.0
+yt-dlp>=2024.0.0
+shazamio>=0.6.0
+static-ffmpeg>=2.5

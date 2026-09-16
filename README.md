@@ -83,6 +83,7 @@ En implementaciones tradicionales de scraping para plataformas SPA como Muzpa, e
 - 🌐 **Selector Interactivo de Navegadores:** Compatible con **Google Chrome**, **Brave Browser**, **Microsoft Edge** y **Chromium empaquetado**.
 - 📁 **Organización Automática:** Guarda los archivos en `~/Downloads/<Nombre de la Playlist>/<Artista> - <Título>.mp3`.
 - 🧠 **Motor de Coincidencia Difusa (`RapidFuzz`):** Scoring ponderado (Título 40%, Artista 30%, Combinado 30%) con bonificación/penalización por desvío de duración en segundos.
+- 🎛 **Identificador de Tracklists en DJ Sets (SoundCloud / YouTube):** Detecta automáticamente listas completas de canciones con marcas de tiempo mediante una combinación híbrida de heurísticas textuales (capítulos de YouTube, descripciones, comentarios) y reconocimiento acústico (fingerprinting de Shazam). Se enriquece con Spotify y se envía directamente a descargar en Muzpa.
 - 🏷 **Etiquetado ID3 Oficial:** Escribe metadatos de Título, Artista y Álbum directamente en el MP3 descargado (`mutagen.easyid3`).
 - 💾 **Persistencia y Recuperación de Sesión:** Guarda el progreso en `state/job_<id>.json` para reanudar sin perder descargas previas.
 
@@ -116,6 +117,8 @@ El sistema fue construido utilizando una selección de librerías modernas de al
 | :--- | :--- | :--- |
 | **`rapidfuzz`** | `^3.0.0` | **Motor de coincidencia difusa (Fuzzy Matching) en C++.** Calcula similitud con `token_set_ratio` y `token_sort_ratio` ponderando título, artista y variaciones de nombres para clasificar los mejores resultados de Muzpa. |
 | **`mutagen`** | `^1.47.0` | **Manipulación y etiquetado de metadatos de audio.** Inyecta etiquetas oficiales ID3v2.3/ID3v2.4 (`EasyID3`, `MP3`) en los archivos `.mp3` descargados para que los reproductores y software de DJ (Traktor, Rekordbox, VirtualDJ) los reconozcan inmediatamente. |
+| **`yt-dlp`** | `^2024.0.0` | **Extracción de audio y metadatos.** Extrae capítulos, descripciones y pistas de audio de YouTube y SoundCloud sin descargas innecesarias. |
+| **`shazamio-core`** | `^1.1.0` | **Reconocimiento acústico.** Genera huellas acústicas nativas en Rust y consulta la base de datos de Shazam de forma gratuita y local. |
 
 ### 5. Validación de Datos, Configuración y CLI
 | Librería | Versión | Rol en el Proyecto |
