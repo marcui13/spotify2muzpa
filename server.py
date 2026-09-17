@@ -5,12 +5,18 @@ warnings.filterwarnings("ignore", category=UserWarning)
 import os
 import re
 import json
+import uuid
 import asyncio
 import logging
+import certifi
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from contextlib import asynccontextmanager
+
+# Configure default CA bundle for macOS
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -868,8 +874,20 @@ async def analyze_dj_set(payload: DJSetAnalyzeRequest):
     if not yt_or_sc and not os.path.exists(url):
         raise HTTPException(status_code=400, detail="URL must be a valid YouTube, SoundCloud link or local audio file.")
 
-    async def _progress_callback(info: Dict[str, Any]):
-        await manager.broadcast({"type": "djset_progress", "data": info})
+    main_loop = asyncio.get_running_loop()
+
+    def _sync_progress_dispatch(info: Dict[str, Any]):
+        try:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "djset_progress", "data": info}),
+                main_loop
+            )
+        except Exception as e:
+            logger.debug(f"Progress dispatch error: {e}")
+
+    temp_id = f"djset_{uuid.uuid4().hex[:10]}"
+    initial_job = DJSetJob(job_id=temp_id, source_url=url, status="extracting_info")
+    dj_set_service.active_jobs[temp_id] = initial_job
 
     # Run analysis in background task
     async def _run_analysis():
@@ -879,7 +897,8 @@ async def analyze_dj_set(payload: DJSetAnalyzeRequest):
                 sample_interval=payload.sample_interval,
                 snippet_duration=payload.snippet_duration,
                 force_acoustic=payload.force_acoustic,
-                on_progress_callback=lambda p: asyncio.create_task(_progress_callback(p))
+                on_progress_callback=_sync_progress_dispatch,
+                job_id=temp_id
             )
             await manager.broadcast({
                 "type": "djset_complete",
@@ -891,10 +910,6 @@ async def analyze_dj_set(payload: DJSetAnalyzeRequest):
                 "type": "djset_error",
                 "data": {"error": str(ex)}
             })
-
-    temp_id = f"djset_{uuid.uuid4().hex[:10]}"
-    initial_job = DJSetJob(job_id=temp_id, source_url=url, status="extracting_info")
-    dj_set_service.active_jobs[temp_id] = initial_job
 
     asyncio.create_task(_run_analysis())
     return {"status": "started", "job_id": temp_id, "job": initial_job.model_dump()}

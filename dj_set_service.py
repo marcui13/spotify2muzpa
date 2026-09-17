@@ -16,10 +16,24 @@ import shutil
 import asyncio
 import logging
 import tempfile
+import warnings
+import random
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Callable
 import httpx
+import certifi
 from rapidfuzz import fuzz
+
+# Ensure SSL and requests use certifi bundle on macOS
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
+# Suppress urllib3 LibreSSL warning on macOS Python 3.9
+try:
+    import urllib3
+    warnings.filterwarnings("ignore", category=urllib3.exceptions.NotOpenSSLWarning)
+except Exception:
+    pass
 
 try:
     from shazamio_core import Recognizer
@@ -49,6 +63,18 @@ IGNORE_PATTERNS = [
     r"^ad$",
 ]
 
+# Pool of mobile and web client signatures for rotation to avoid 429 rate limits
+SHAZAM_USER_AGENTS = [
+    ("IPHONE", "15.0.0", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"),
+    ("IPHONE", "14.1.0", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"),
+    ("IPHONE", "14.0.0", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"),
+    ("ANDROID", "14.0.0", "Dalvik/2.1.0 (Linux; U; Android 14; Pixel 8 Build/UD1A.230803.041)"),
+    ("ANDROID", "13.0.0", "Dalvik/2.1.0 (Linux; U; Android 13; SM-S918B Build/TP1A.220624.014)"),
+    ("ANDROID", "12.0.0", "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B Build/SP1A.210812.016)"),
+    ("WEB", "14.1.0", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    ("WEB", "14.1.0", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+]
+
 
 class ShazamRecognitionClient:
     """Direct, lightweight Shazam acoustic recognition client using shazamio_core and httpx."""
@@ -58,8 +84,13 @@ class ShazamRecognitionClient:
         self.country = country
         self.recognizer = Recognizer() if Recognizer else None
 
-    async def recognize_slice(self, file_path: str) -> Optional[Dict[str, Any]]:
-        """Recognizes a sliced audio snippet via Shazam acoustic fingerprinting."""
+    async def recognize_slice(
+        self,
+        file_path: str,
+        max_retries: int = 3,
+        retry_backoff: float = 4.0
+    ) -> Optional[Dict[str, Any]]:
+        """Recognizes a sliced audio snippet via Shazam acoustic fingerprinting with retry & rate-limit backoff."""
         if not self.recognizer:
             logger.warning("shazamio_core is not installed, cannot perform acoustic recognition.")
             return None
@@ -72,12 +103,12 @@ class ShazamRecognitionClient:
             if not sig or not hasattr(sig, "signature") or not sig.signature:
                 return None
 
-            uuid1 = str(uuid.uuid4()).upper()
-            uuid2 = str(uuid.uuid4()).upper()
-            url = f"https://amp.shazam.com/discovery/v5/{self.language}/{self.country}/iphone/-/tag/{uuid1}/{uuid2}"
+            # If no samples were extracted (e.g. unsupported codec), skip
+            if not getattr(sig.signature, "samples", 0):
+                return None
 
             payload = {
-                "timezone": "UTC",
+                "timezone": "Europe/Moscow",
                 "signature": {
                     "uri": sig.signature.uri,
                     "samplems": sig.signature.samples
@@ -87,18 +118,44 @@ class ShazamRecognitionClient:
                 "geolocation": {}
             }
 
-            headers = {
-                "User-Agent": "Shazam/3673 CFNetwork/1408.0.4 Darwin/22.5.0",
-                "Content-Type": "application/json"
-            }
+            for attempt in range(max_retries):
+                platform, app_ver, ua = random.choice(SHAZAM_USER_AGENTS)
+                device = platform.lower()
+                uuid1 = str(uuid.uuid4()).upper()
+                uuid2 = str(uuid.uuid4()).upper()
+                url = (
+                    f"https://amp.shazam.com/discovery/v5/{self.language}/{self.country}/{device}/-/tag/{uuid1}/{uuid2}"
+                    "?sync=true&webv3=true&sampling=true"
+                    "&connected=&shazamapiversion=v3&sharehub=true&hubv5minorversion=v5.1&hidelb=true&video=v3"
+                )
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    track = data.get("track")
-                    if track and track.get("title"):
-                        return track
+                headers = {
+                    "X-Shazam-Platform": platform,
+                    "X-Shazam-AppVersion": app_ver,
+                    "Accept": "*/*",
+                    "Accept-Language": self.language,
+                    "User-Agent": ua,
+                    "Content-Type": "application/json"
+                }
+
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        track = data.get("track")
+                        if track and track.get("title"):
+                            return track
+                        return None  # Successful scan, no track match found in Shazam database
+                    elif resp.status_code == 429:
+                        # Rate limit hit: parse Retry-After if available, or apply exponential backoff
+                        retry_after_str = resp.headers.get("Retry-After")
+                        wait_sec = float(retry_after_str) if retry_after_str and retry_after_str.isdigit() else (retry_backoff * (2 ** attempt)) + random.uniform(1.0, 3.0)
+                        logger.warning(f"Shazam rate limited (HTTP 429). Attempt {attempt + 1}/{max_retries}. Backing off for {wait_sec:.1f}s...")
+                        await asyncio.sleep(wait_sec)
+                    else:
+                        logger.debug(f"Shazam response status {resp.status_code} for {file_path}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1.5)
         except Exception as e:
             logger.debug(f"Shazam slice recognition failed for {file_path}: {e}")
         return None
@@ -134,6 +191,24 @@ class DJSetService:
         if len(parts) == 1:
             return parts[0]
         return 0
+
+    @staticmethod
+    def clean_source_url(url: str) -> str:
+        """Removes tracking query parameters (utm_*, si, etc.) while preserving essential video/track identifiers."""
+        import urllib.parse
+        try:
+            parsed = urllib.parse.urlparse(url.strip())
+            if "soundcloud.com" in parsed.netloc:
+                # Keep clean track URL: https://soundcloud.com/artist/title
+                return urllib.parse.urlunparse(parsed._replace(query="", fragment=""))
+            elif "youtube.com" in parsed.netloc or "youtu.be" in parsed.netloc:
+                q_pairs = urllib.parse.parse_qsl(parsed.query)
+                kept_pairs = [(k, v) for k, v in q_pairs if k in ("v", "list", "t")]
+                new_query = urllib.parse.urlencode(kept_pairs)
+                return urllib.parse.urlunparse(parsed._replace(query=new_query, fragment=""))
+        except Exception:
+            pass
+        return url.strip()
 
     @classmethod
     def is_ignored_title(cls, text: str) -> bool:
@@ -218,16 +293,12 @@ class DJSetService:
 
         # Sort chronologically and deduplicate exact timestamp collisions
         results.sort(key=lambda x: x[0])
-        unique_results: List[Tuple[int, str, str]] = []
-        for sec, artist, title in results:
-            if not unique_results or abs(unique_results[-1][0] - sec) > 5:
-                unique_results.append((sec, artist, title))
-
-        return unique_results
+        results.sort(key=lambda x: x[0])
+        return results
 
     @classmethod
     def parse_chapters(cls, chapters: List[Dict[str, Any]]) -> List[Tuple[int, str, str]]:
-        """Parses YouTube chapters into (seconds, artist, title)."""
+        """Parses YouTube chapters metadata returned by yt-dlp."""
         results: List[Tuple[int, str, str]] = []
         for ch in chapters:
             start_sec = int(ch.get("start_time", 0))
@@ -254,28 +325,43 @@ class DJSetService:
         """Extracts video metadata, description, chapters, and comments using yt-dlp."""
         import yt_dlp
 
+        ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+        ffmpeg_dir = os.path.dirname(ffmpeg_bin) if os.path.exists(ffmpeg_bin) else None
+        clean_url = self.clean_source_url(url)
+
         ydl_opts = {
             "skip_download": True,
             "extract_flat": False,
             "no_warnings": True,
             "quiet": True,
+            "nocheckcertificate": True,
+            "cacert": certifi.where(),
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
             "get_comments": True,
             "extractor_args": {
-                "youtube": {"max_comments": ["20", "all", "10"]}
+                "youtube": {
+                    "max_comments": ["20", "all", "10"],
+                    "player_client": ["android", "web"]
+                }
             }
         }
+        if ffmpeg_dir:
+            ydl_opts["ffmpeg_location"] = ffmpeg_dir
 
         loop = asyncio.get_running_loop()
 
         def _run_extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(url, download=False)
+                return ydl.extract_info(clean_url, download=False)
 
         try:
             info = await loop.run_in_executor(None, _run_extract)
             return info or {}
         except Exception as e:
-            logger.error(f"yt-dlp extract_info failed for {url}: {e}")
+            logger.error(f"yt-dlp extract_info failed for {clean_url}: {e}")
             raise RuntimeError(f"Failed to extract info from URL: {e}")
 
     @classmethod
@@ -357,7 +443,8 @@ class DJSetService:
         job_id: Optional[str] = None
     ) -> List[Tuple[int, str, str]]:
         """
-        Slices audio file at regular intervals, recognizes snippets via Shazam,
+        Slices audio file with adaptive stepping (skipping ahead when a track is identified),
+        recognizes snippets via Shazam with UA rotation and rate-limit backoff,
         and returns list of detected (seconds, artist, title).
         """
         ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
@@ -366,27 +453,32 @@ class DJSetService:
             return []
 
         detected: List[Tuple[int, str, str]] = []
-        sample_points = list(range(15, max(total_duration_sec - snippet_duration, 16), sample_interval))
-        total_points = len(sample_points)
+        curr_sec = 15
+        end_sec = max(total_duration_sec - snippet_duration, 16)
+
+        # In DJ sets, tracks play for 3-6 minutes. When a song is identified,
+        # skip forward by 180s (3 minutes) to avoid redundant requests and rate limits.
+        match_skip_sec = 180
+        default_step_sec = max(sample_interval, 90)
 
         with tempfile.TemporaryDirectory(prefix="djset_slices_") as tmp_dir:
-            for idx, start_sec in enumerate(sample_points):
+            while curr_sec <= end_sec:
                 if job_id and job_id in self._cancelled_jobs:
                     logger.info(f"Job {job_id} cancelled during acoustic scan.")
                     break
 
-                slice_path = os.path.join(tmp_dir, f"slice_{start_sec}.mp3")
+                slice_path = os.path.join(tmp_dir, f"slice_{curr_sec}.wav")
 
-                # Fast ffmpeg slice
+                # Fast ffmpeg slice to 16kHz mono 16-bit PCM WAV (required by shazamio_core)
                 cmd = [
                     ffmpeg_bin,
                     "-y",
-                    "-ss", str(start_sec),
+                    "-ss", str(curr_sec),
                     "-t", str(snippet_duration),
                     "-i", audio_file_path,
                     "-ac", "1",
                     "-ar", "16000",
-                    "-b:a", "64k",
+                    "-c:a", "pcm_s16le",
                     "-loglevel", "error",
                     slice_path
                 ]
@@ -398,28 +490,44 @@ class DJSetService:
                 )
                 await proc.wait()
 
-                # Recognize slice
+                # Recognize slice (with UA rotation & 429 exponential backoff)
                 track = await self.shazam_client.recognize_slice(slice_path)
+                track_found = False
                 if track:
                     title = track.get("title", "").strip()
                     artist = track.get("subtitle", "").strip()
                     if title and artist:
-                        detected.append((start_sec, artist, title))
-                        logger.info(f"[{self.seconds_to_timestamp(start_sec)}] Recognized: {artist} - {title}")
+                        detected.append((curr_sec, artist, title))
+                        logger.info(f"[{self.seconds_to_timestamp(curr_sec)}] Recognized: {artist} - {title}")
+                        track_found = True
+
+                # Clean up temporary slice to save disk space
+                try:
+                    if os.path.exists(slice_path):
+                        os.remove(slice_path)
+                except Exception:
+                    pass
 
                 # Progress update
-                percent = int((idx + 1) / max(total_points, 1) * 100)
+                percent = int(min(curr_sec / max(end_sec, 1), 1.0) * 100)
                 if on_progress_callback:
                     on_progress_callback({
-                        "current": idx + 1,
-                        "total": total_points,
+                        "current": self.seconds_to_timestamp(curr_sec),
+                        "total": self.seconds_to_timestamp(total_duration_sec),
                         "percent": percent,
-                        "eta": f"~{int((total_points - idx - 1) * 2.5)}s left",
                         "detected_count": len(detected)
                     })
 
-                # Polite pause to avoid rate limiting
-                await asyncio.sleep(0.4)
+                # Adaptive advance:
+                # If a track was identified, advance by match_skip_sec (180s).
+                # Otherwise, advance by default_step_sec (90-120s).
+                if track_found:
+                    curr_sec += match_skip_sec
+                else:
+                    curr_sec += default_step_sec
+
+                # Polite inter-request pacing (2.0s - 2.8s) to strictly prevent 429
+                await asyncio.sleep(2.0 + random.uniform(0.2, 0.8))
 
         return detected
 
@@ -471,24 +579,32 @@ class DJSetService:
         sample_interval: int = 90,
         snippet_duration: int = 12,
         force_acoustic: bool = False,
-        on_progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        on_progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        job_id: Optional[str] = None
     ) -> DJSetJob:
         """
         Main entrypoint: analyzes DJ set from URL, parses heuristics or runs acoustic scan,
         enriches with Spotify, and returns a completed DJSetJob.
         """
-        job_id = f"djset_{uuid.uuid4().hex[:10]}"
-        job = DJSetJob(
-            job_id=job_id,
+        actual_job_id = job_id or f"djset_{uuid.uuid4().hex[:10]}"
+        job = self.active_jobs.get(actual_job_id) or DJSetJob(
+            job_id=actual_job_id,
             source_url=url,
             status="extracting_info"
         )
-        self.active_jobs[job_id] = job
+        self.active_jobs[actual_job_id] = job
+
+        main_loop = asyncio.get_running_loop()
 
         def _update_progress(info_dict: Dict[str, Any]):
             job.progress = info_dict
             if on_progress_callback:
-                on_progress_callback(info_dict)
+                try:
+                    res = on_progress_callback(info_dict)
+                    if asyncio.iscoroutine(res):
+                        asyncio.run_coroutine_threadsafe(res, main_loop)
+                except Exception as cb_err:
+                    logger.debug(f"Progress callback error: {cb_err}")
 
         try:
             _update_progress({"status_text": "Extracting set metadata & chapters...", "percent": 5})
@@ -544,30 +660,65 @@ class DJSetService:
                 audio_file = os.path.join(tmp_dir, "set_audio.mp3")
 
                 import yt_dlp
+                ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+                ffmpeg_dir = os.path.dirname(ffmpeg_bin) if os.path.exists(ffmpeg_bin) else None
+
+                def _dl_hook(d):
+                    if d.get("status") == "downloading":
+                        total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                        dl_bytes = d.get("downloaded_bytes", 0)
+                        pct = 0
+                        if total_bytes > 0:
+                            pct = int(dl_bytes / total_bytes * 100)
+                        elif d.get("fragment_count"):
+                            frag_idx = d.get("fragment_index", 0)
+                            frag_cnt = d.get("fragment_count", 1)
+                            pct = int(frag_idx / max(frag_cnt, 1) * 100)
+
+                        overall_pct = 15 + int(pct * 0.12)
+                        _update_progress({
+                            "status_text": f"Downloading audio stream: {pct}%...",
+                            "percent": overall_pct
+                        })
+
+                clean_url = self.clean_source_url(url)
                 ydl_download_opts = {
                     "format": "ba[abr<=64]/ba/b",
                     "outtmpl": os.path.join(tmp_dir, "raw_audio.%(ext)s"),
                     "quiet": True,
                     "no_warnings": True,
+                    "nocheckcertificate": True,
+                    "cacert": certifi.where(),
+                    "http_headers": {
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    },
+                    "progress_hooks": [_dl_hook],
+                    "extractor_args": {
+                        "youtube": {
+                            "player_client": ["android", "web"]
+                        }
+                    },
                     "postprocessors": [{
                         "key": "FFmpegExtractAudio",
                         "preferredcodec": "mp3",
                         "preferredquality": "64",
                     }]
                 }
+                if ffmpeg_dir:
+                    ydl_download_opts["ffmpeg_location"] = ffmpeg_dir
 
                 loop = asyncio.get_running_loop()
                 def _download_audio():
                     with yt_dlp.YoutubeDL(ydl_download_opts) as ydl:
-                        ydl.download([url])
+                        ydl.download([clean_url])
 
                 await loop.run_in_executor(None, _download_audio)
 
-                # Locate the converted mp3 file
-                files = list(Path(tmp_dir).glob("*.mp3"))
+                # Locate the converted audio file
+                files = list(Path(tmp_dir).glob("*.mp3")) + list(Path(tmp_dir).glob("*.m4a")) + list(Path(tmp_dir).glob("*.opus"))
                 if not files:
-                    # Check any audio file
-                    files = list(Path(tmp_dir).glob("*.*"))
+                    files = [f for f in Path(tmp_dir).iterdir() if f.is_file() and not f.name.endswith(".part")]
                 
                 if not files:
                     raise RuntimeError("Failed to download audio stream for analysis.")
@@ -582,7 +733,7 @@ class DJSetService:
                     sample_interval=sample_interval,
                     snippet_duration=snippet_duration,
                     on_progress_callback=lambda p: _update_progress({
-                        "status_text": f"Analyzing slice {p['current']}/{p['total']} ({p.get('detected_count', 0)} tracks found)...",
+                        "status_text": f"Scanning set at {p.get('current', '')} / {p.get('total', '')} ({p.get('detected_count', 0)} tracks found)...",
                         "percent": 25 + int(p["percent"] * 0.5)
                     }),
                     job_id=job_id

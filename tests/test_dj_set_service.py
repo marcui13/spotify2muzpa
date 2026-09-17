@@ -138,3 +138,61 @@ def test_convert_to_playlist_job():
     assert playlist_job.tracks[0].spotify_track.bpm == 124
     assert playlist_job.tracks[0].spotify_track.camelot_key == "8A"
     assert playlist_job.tracks[1].spotify_track.title == "Glue"
+
+
+def test_clean_source_url():
+    sc_dirty = "https://soundcloud.com/simonvuarambon/metropolitano2026?utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing"
+    assert DJSetService.clean_source_url(sc_dirty) == "https://soundcloud.com/simonvuarambon/metropolitano2026"
+
+    yt_dirty = "https://www.youtube.com/watch?v=gCYcHz2k5x0&utm_source=test&si=12345"
+    assert DJSetService.clean_source_url(yt_dirty) == "https://www.youtube.com/watch?v=gCYcHz2k5x0"
+
+
+@pytest.mark.asyncio
+async def test_shazam_retry_on_429(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    from dj_set_service import ShazamRecognitionClient
+
+    client = ShazamRecognitionClient()
+
+    # Create dummy dummy audio slice file
+    test_slice = tmp_path / "test_slice.wav"
+    test_slice.write_bytes(b"RIFF" + b"\x00" * 2000)
+
+    # Mock recognizer
+    mock_sig = MagicMock()
+    mock_sig.signature.uri = "data:audio/vnd.shazam.sig;base64,AAA"
+    mock_sig.signature.samples = 10000
+    mock_sig.timestamp = 1000
+
+    mock_rec = AsyncMock()
+    mock_rec.recognize_path.return_value = mock_sig
+    client.recognizer = mock_rec
+
+    # Simulate httpx returning 429 first, then 200 with track
+    call_count = 0
+
+    class MockResponse:
+        def __init__(self, status_code, json_data=None, headers=None):
+            self.status_code = status_code
+            self._json = json_data or {}
+            self.headers = headers or {}
+
+        def json(self):
+            return self._json
+
+    async def mock_post(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return MockResponse(429, headers={"Retry-After": "0.01"})
+        return MockResponse(200, json_data={"track": {"title": "Papta Swing", "subtitle": "Earful Soul"}})
+
+    # Patch httpx.AsyncClient.post
+    monkeypatch.setattr("httpx.AsyncClient.post", mock_post)
+
+    track = await client.recognize_slice(str(test_slice), max_retries=3, retry_backoff=0.01)
+    assert track is not None
+    assert track["title"] == "Papta Swing"
+    assert call_count == 2
+

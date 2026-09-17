@@ -217,6 +217,51 @@ python run.py --playlist-url "https://open.spotify.com/playlist/37i9dQZF1DXcBWIG
 
 ---
 
+### Modo 4: Identificador de Tracklists en DJ Sets (SoundCloud / YouTube)
+Para extraer el tracklist completo de sesiones de DJs, sets en vivo (Cercle, Boiler Room, etc.) o mezclas de SoundCloud:
+1. Inicia el servidor con `python server.py` y abre `http://localhost:8000`.
+2. Haz clic en la pestaña **"DJ Set Link (YouTube / SoundCloud)"**.
+3. Pega cualquier enlace de YouTube o SoundCloud (por ejemplo, sets de 1 a 3+ horas).
+4. Haz clic en **"Identify Tracklist"**:
+   - **Capa Heurística:** Si el set tiene marcas de tiempo en la descripción, capítulos o comentarios fijados, se extraen instantáneamente en < 2 segundos.
+   - **Capa Acústica Adaptativa (Shazam):** Si el set no tiene lista de temas escrita, el sistema descarga el stream en segundo plano, corta fragmentos inteligentes con `ffmpeg`, los identifica con huellas acústicas nativas de Shazam evitando rate-limits mediante saltos adaptativos de 3 minutos, y enriquece cada track con BPM, Tonalidad Camelot (ej. `8A`, `11B`) y carátula oficial de Spotify.
+5. Puedes exportar el tracklist a texto, sincronizarlo con Spotify o hacer clic en **"Download in Muzpa"** para descargar automáticamente todos los MP3 a 320 kbps.
+
+---
+
+## 🧹 Gestión de Archivos y Almacenamiento Local (Limpieza de Temporales)
+
+Para mantener el disco limpio y optimizado, es importante comprender qué archivos se guardan y dónde:
+
+### 1. ¿Dónde se guardan los archivos descargados definitivos?
+- **Destino:** Por defecto, las canciones finales descargadas en MP3 (320 kbps) con sus etiquetas ID3 oficiales se guardan en:
+  - macOS / Linux: `~/Downloads/<Nombre de la Playlist o DJ Set>/`
+  - Windows: `C:\Users\<TuUsuario>\Downloads\<Nombre de la Playlist o DJ Set>\`
+- Puedes cambiar este directorio editando `DOWNLOAD_DIR` en tu archivo `.env`.
+
+### 2. ¿Dónde se guardan los archivos temporales de análisis acústico?
+- **Directorios temporales del sistema:** Durante el análisis acústico de DJ sets largos, `yt-dlp` y `ffmpeg` procesan el audio dentro de carpetas temporales con prefijo `djset_audio_` y `djset_slices_`.
+  - En macOS: Se ubican bajo `/var/folders/.../T/` o `/tmp/`.
+  - En Linux / Windows: Se ubican en el directorio temporal estándar del sistema operativo.
+- **Autolimpieza automática:** El código utiliza administradores de contexto seguros de Python (`tempfile.TemporaryDirectory`). **Tan pronto como finaliza o se cancela el análisis, la carpeta temporal completa y el audio descargado se eliminan automáticamente del disco.** Además, cada fragmento individual `.wav` se borra en memoria/disco inmediatamente tras ser reconocido por Shazam.
+
+### 3. Cómo limpiar datos en caché periódicamente
+Si utilizas la aplicación con frecuencia, puedes liberar espacio residual de las siguientes fuentes:
+
+```bash
+# 1. Limpiar la caché interna de descargas de yt-dlp:
+yt-dlp --rm-cache-dir
+
+# 2. Limpiar perfiles temporales de navegador antiguos (si deseas reiniciar sesión en Muzpa):
+rm -rf user_data_profile/
+
+# 3. Limpiar archivos de caché de Python y temporales de pytest:
+find . -type d -name "__pycache__" -exec rm -rf {} +
+rm -rf .pytest_cache
+```
+
+---
+
 ## 📦 Empaquetado y Distribución Desktop
 
 Para generar ejecutables autónomos de un solo clic que no requieran que el usuario instale Python ni dependencias manuales:
