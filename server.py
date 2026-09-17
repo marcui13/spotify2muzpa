@@ -962,24 +962,144 @@ async def dj_set_to_playlist(payload: DJSetToPlaylistRequest):
     return {"status": "success", "job": playlist_job.model_dump()}
 
 
+@app.get("/api/spotify/auth-url")
+async def get_spotify_auth_url():
+    """Returns the Spotify OAuth authorization URL for user login."""
+    auth_url = spotify_service.get_user_auth_url()
+    if not auth_url:
+        return {"status": "error", "message": "Spotify API credentials (SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET) not configured."}
+    return {
+        "status": "success",
+        "auth_url": auth_url,
+        "is_authenticated": spotify_service.is_user_authenticated()
+    }
+
+
+@app.get("/api/spotify/status")
+async def get_spotify_auth_status():
+    """Checks whether the user has an active Spotify OAuth token."""
+    return {
+        "status": "success",
+        "is_authenticated": spotify_service.is_user_authenticated(),
+        "has_credentials": bool(spotify_service.client_id and spotify_service.client_secret)
+    }
+
+
+@app.get("/api/spotify/callback")
+async def spotify_auth_callback(code: Optional[str] = None, error: Optional[str] = None):
+    """Handles Spotify OAuth authorization redirect callback."""
+    if error:
+        return HTMLResponse(f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Spotify Authorization Error</title></head>
+        <body style="background:#121212;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+            <div style="text-align:center;padding:2rem;background:#1e1e1e;border-radius:12px;border:1px solid #333;max-width:400px;">
+                <h2 style="color:#f43f5e;">Authorization Failed</h2>
+                <p style="color:#aaa;">Error: {error}</p>
+                <button onclick="window.close()" style="background:#333;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;margin-top:1rem;">Close Window</button>
+            </div>
+        </body>
+        </html>
+        """)
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code.")
+
+    success = spotify_service.handle_auth_callback(code)
+    if success:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Spotify Authorization Successful</title></head>
+        <body style="background:#121212;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+            <div style="text-align:center;padding:2rem;background:#1e1e1e;border-radius:12px;border:1px solid #1DB954;max-width:400px;">
+                <h2 style="color:#1DB954;">✓ Connected to Spotify!</h2>
+                <p style="color:#ccc;">Your account is now linked. You can close this window.</p>
+                <script>
+                    try {
+                        if (window.opener) {
+                            window.opener.postMessage({ type: 'spotify_auth_success' }, '*');
+                        }
+                    } catch(e) {}
+                    setTimeout(() => window.close(), 1500);
+                </script>
+            </div>
+        </body>
+        </html>
+        """)
+    else:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Spotify Token Error</title></head>
+        <body style="background:#121212;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+            <div style="text-align:center;padding:2rem;background:#1e1e1e;border-radius:12px;border:1px solid #f43f5e;max-width:400px;">
+                <h2 style="color:#f43f5e;">Failed to verify Spotify authorization.</h2>
+                <button onclick="window.close()" style="background:#333;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;margin-top:1rem;">Close Window</button>
+            </div>
+        </body>
+        </html>
+        """, status_code=400)
+
+
 @app.post("/api/djset/export-spotify")
 async def export_dj_set_to_spotify(payload: Dict[str, Any]):
-    """Prepares tracks for Spotify playlist export or returns track URIs."""
+    """Creates a playlist in the user's Spotify account or returns track URIs for clipboard Cmd+V."""
     job_id = payload.get("job_id")
     target_id = job_id if job_id in dj_set_service.active_jobs else (list(dj_set_service.active_jobs.keys())[-1] if dj_set_service.active_jobs else None)
     if not target_id:
         raise HTTPException(status_code=404, detail="No DJ set job found.")
 
     job = dj_set_service.active_jobs[target_id]
-    matched_ids = [f"spotify:track:{t.spotify_id}" for t in job.tracks if t.spotify_id]
+    matched_ids = [t.spotify_id for t in job.tracks if t.spotify_id]
+    matched_uris = [f"spotify:track:{tid}" for tid in matched_ids]
 
+    # If user is authenticated, create playlist on their account
+    if spotify_service.is_user_authenticated():
+        p_name = payload.get("playlist_name") or f"DJ Set — {job.title}"
+        created_pl = spotify_service.create_user_playlist(
+            name=p_name,
+            description=f"Generated by Spotify2Muzpa Studio from {job.source_url}",
+            track_ids_or_uris=matched_uris
+        )
+        if created_pl:
+            return {
+                "status": "success",
+                "created": True,
+                "playlist_id": created_pl["playlist_id"],
+                "playlist_url": created_pl["playlist_url"],
+                "playlist_uri": created_pl["playlist_uri"],
+                "matched_tracks": len(matched_ids),
+                "total_tracks": len(job.tracks),
+                "track_uris": matched_uris,
+                "playlist_name": p_name
+            }
+
+    # If not authenticated or creation failed, provide auth_url and track_uris for 1-click Cmd+V paste
+    auth_url = spotify_service.get_user_auth_url()
     return {
-        "status": "success",
+        "status": "auth_required" if auth_url else "manual_only",
+        "created": False,
+        "auth_url": auth_url,
         "matched_tracks": len(matched_ids),
         "total_tracks": len(job.tracks),
-        "track_uris": matched_ids,
+        "track_uris": matched_uris,
         "playlist_name": job.title
     }
+
+
+@app.post("/api/djset/export-youtube")
+async def export_dj_set_to_youtube(payload: Dict[str, Any]):
+    """Resolves YouTube video IDs and returns multi-track YouTube playlist queue URL."""
+    job_id = payload.get("job_id")
+    target_id = job_id if job_id in dj_set_service.active_jobs else (list(dj_set_service.active_jobs.keys())[-1] if dj_set_service.active_jobs else None)
+    if not target_id:
+        raise HTTPException(status_code=404, detail="No DJ set job found.")
+
+    res = await dj_set_service.resolve_youtube_playlist(target_id)
+    return res
+
 
 
 # Mount static frontend

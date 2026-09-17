@@ -37,3 +37,45 @@ def test_spotify_track_clean_query():
     assert "Daft Punk" in clean
     assert "One More Time" in clean
     assert "feat." not in clean
+
+
+def test_spotify_oauth_helpers():
+    from unittest.mock import MagicMock
+    service = SpotifyService(client_id="dummy_id", client_secret="dummy_secret")
+    service._oauth_manager = MagicMock()
+    service._oauth_manager.get_authorize_url.return_value = "https://accounts.spotify.com/authorize?client_id=dummy"
+    assert service.get_user_auth_url() == "https://accounts.spotify.com/authorize?client_id=dummy"
+
+    service._oauth_manager.get_access_token.return_value = {"access_token": "mock_token"}
+    assert service.handle_auth_callback("test_code") is True
+
+    service._oauth_manager.cache_handler.get_cached_token.return_value = {"access_token": "cached"}
+    service._oauth_manager.validate_token.return_value = {"access_token": "valid"}
+    user_sp = service.get_user_client()
+    assert user_sp is not None
+    assert service.is_user_authenticated() is True
+
+
+def test_spotify_create_user_playlist():
+    from unittest.mock import MagicMock, patch
+    service = SpotifyService(client_id="dummy_id", client_secret="dummy_secret")
+    mock_sp = MagicMock()
+    mock_sp.current_user.return_value = {"id": "test_user_123"}
+    mock_sp.user_playlist_create.return_value = {
+        "id": "pl_123",
+        "name": "My DJ Set",
+        "external_urls": {"spotify": "https://open.spotify.com/playlist/pl_123"}
+    }
+
+    with patch.object(service, "get_user_client", return_value=mock_sp):
+        res = service.create_user_playlist(
+            name="My DJ Set",
+            description="Test Set",
+            track_ids_or_uris=["spotify:track:abc", "def"]
+        )
+        assert res is not None
+        assert res["playlist_id"] == "pl_123"
+        assert res["playlist_uri"] == "spotify:playlist:pl_123"
+        assert res["tracks_added"] == 2
+        mock_sp.playlist_add_items.assert_called_once_with("pl_123", ["spotify:track:abc", "spotify:track:def"])
+

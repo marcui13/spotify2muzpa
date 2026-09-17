@@ -176,3 +176,84 @@ def test_djset_endpoints(client, monkeypatch):
     if orchestrator._worker_task:
         orchestrator._worker_task.cancel()
     orchestrator.current_job = None
+
+
+def test_spotify_auth_and_export_endpoints(client, monkeypatch):
+    from server import spotify_service, dj_set_service
+    from models import DJSetJob, DJSetTrackItem
+
+    # Mock spotify_service auth methods
+    monkeypatch.setattr(spotify_service, "get_user_auth_url", lambda: "https://accounts.spotify.com/authorize?mock=1")
+    monkeypatch.setattr(spotify_service, "is_user_authenticated", lambda: False)
+    monkeypatch.setattr(spotify_service, "handle_auth_callback", lambda code: code == "valid_code")
+
+    # 1. Auth URL
+    res = client.get("/api/spotify/auth-url")
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    assert "https://accounts.spotify.com" in res.json()["auth_url"]
+
+    # 2. Status
+    res = client.get("/api/spotify/status")
+    assert res.status_code == 200
+    assert res.json()["is_authenticated"] is False
+
+    # 3. Callback with valid code
+    res = client.get("/api/spotify/callback?code=valid_code")
+    assert res.status_code == 200
+    assert "Connected to Spotify" in res.text
+
+    # 4. Callback with error
+    res = client.get("/api/spotify/callback?error=access_denied")
+    assert res.status_code == 200
+    assert "Authorization Failed" in res.text
+
+    # 5. Export to Spotify when user not yet authenticated
+    job = DJSetJob(
+        job_id="test_exp_job",
+        source_url="https://youtube.com/watch?v=123",
+        title="Live Mix",
+        tracks=[DJSetTrackItem(id="t1", timestamp="0:00", artist="Artist", title="Song", spotify_id="sp123")]
+    )
+    dj_set_service.active_jobs["test_exp_job"] = job
+
+    res = client.post("/api/djset/export-spotify", json={"job_id": "test_exp_job"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "auth_required"
+    assert res.json()["created"] is False
+    assert len(res.json()["track_uris"]) == 1
+
+    # 6. Export to Spotify when user authenticated
+    monkeypatch.setattr(spotify_service, "is_user_authenticated", lambda: True)
+    monkeypatch.setattr(spotify_service, "create_user_playlist", lambda name, description, track_ids_or_uris: {
+        "playlist_id": "pl_created_456",
+        "playlist_url": "https://open.spotify.com/playlist/pl_created_456",
+        "playlist_uri": "spotify:playlist:pl_created_456",
+        "name": name,
+        "tracks_added": len(track_ids_or_uris)
+    })
+
+    res = client.post("/api/djset/export-spotify", json={"job_id": "test_exp_job"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    assert res.json()["created"] is True
+    assert res.json()["playlist_id"] == "pl_created_456"
+
+    # 7. Export to YouTube endpoint
+    async def mock_resolve(target_id):
+        return {
+            "status": "success",
+            "playlist_name": "Live Mix",
+            "total_tracks": 1,
+            "resolved_tracks": 1,
+            "video_ids": ["vid_123"],
+            "playlist_url": "https://www.youtube.com/watch_videos?video_ids=vid_123",
+            "tracklist_text": "1. Artist - Song"
+        }
+    monkeypatch.setattr(dj_set_service, "resolve_youtube_playlist", mock_resolve)
+
+    res = client.post("/api/djset/export-youtube", json={"job_id": "test_exp_job"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+    assert "https://www.youtube.com/watch_videos?video_ids=vid_123" == res.json()["playlist_url"]
+

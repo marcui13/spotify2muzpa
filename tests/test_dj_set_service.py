@@ -196,3 +196,44 @@ async def test_shazam_retry_on_429(monkeypatch, tmp_path):
     assert track["title"] == "Papta Swing"
     assert call_count == 2
 
+
+@pytest.mark.asyncio
+async def test_djset_resolve_youtube_playlist(monkeypatch):
+    from dj_set_service import DJSetService
+    from models import DJSetJob, DJSetTrackItem
+
+    service = DJSetService()
+    job = DJSetJob(
+        job_id="job_yt_test",
+        source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        title="Rick Astley Live Set",
+        tracks=[
+            DJSetTrackItem(id="t1", timestamp="00:00", artist="Rick Astley", title="Never Gonna Give You Up"),
+            DJSetTrackItem(id="t2", timestamp="03:30", artist="Rick Astley", title="Together Forever", youtube_id="y6120QOlsfU")
+        ]
+    )
+    service.active_jobs["job_yt_test"] = job
+
+    class MockYDL:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def extract_info(self, query, download=False):
+            return {"entries": [{"id": "dQw4w9WgXcQ", "title": "Never Gonna Give You Up"}]}
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", MockYDL)
+
+    res = await service.resolve_youtube_playlist("job_yt_test")
+    assert res["status"] == "success"
+    assert res["total_tracks"] == 2
+    assert res["resolved_tracks"] == 2
+    assert "dQw4w9WgXcQ" in res["video_ids"]
+    assert "y6120QOlsfU" in res["video_ids"]
+    assert "https://www.youtube.com/watch_videos?video_ids=" in res["playlist_url"]
+    assert "dQw4w9WgXcQ" in res["playlist_url"]
+    assert "y6120QOlsfU" in res["playlist_url"]
+
+

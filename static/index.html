@@ -255,6 +255,9 @@
                 <button onclick="exportDjSetToSpotify()" id="exportSpotifyBtn" class="px-3 py-1.5 rounded-lg bg-[#1DB954]/20 hover:bg-[#1DB954]/30 border border-[#1DB954]/40 text-emerald-300 text-xs font-semibold transition flex items-center gap-1.5">
                   <i class="fa-brands fa-spotify text-emerald-400"></i> Export to Spotify
                 </button>
+                <button onclick="exportDjSetToYouTube()" id="exportYouTubeBtn" class="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs font-semibold transition flex items-center gap-1.5">
+                  <i class="fa-brands fa-youtube text-red-400"></i> Export to YouTube
+                </button>
                 <button onclick="sendDjSetToMuzpa()" id="djSetToMuzpaBtn" class="px-4 py-1.5 rounded-lg bg-spotify hover:bg-spotify-hover text-black text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-spotify/20">
                   <i class="fa-solid fa-cloud-arrow-down"></i> Download in Muzpa
                 </button>
@@ -395,10 +398,14 @@
               <div class="flex items-center flex-wrap gap-2 text-[11px] text-spotify-muted mt-1">
                 <span id="activeAlbum" class="truncate"><i class="fa-solid fa-compact-disc text-[10px]" aria-hidden="true"></i> Album</span>
                 <span class="text-neutral-600">•</span>
-                <span id="activeDuration"><i class="fa-regular fa-clock text-[10px]" aria-hidden="true"></i> 0:00</span>
-                <a id="activeSpotifyLink" href="#" target="_blank" rel="noopener noreferrer" class="text-spotify hover:underline flex items-center gap-1 font-mono text-[10px]">
-                  Spotify <i class="fa-solid fa-arrow-up-right-from-square text-[9px]" aria-hidden="true"></i>
-                </a>
+                <span class="text-neutral-600">•</span>
+                <button id="activeSpotifyBtn" onclick="openActiveSpotifyTrack()" title="Open in Spotify App (or Web)" class="text-spotify hover:underline flex items-center gap-1 font-mono text-[10px] cursor-pointer">
+                  <i class="fa-brands fa-spotify"></i> Spotify
+                </button>
+                <span class="text-neutral-600">•</span>
+                <button id="activeYouTubeBtn" onclick="openActiveYouTubeTrack()" title="Search & listen on YouTube" class="text-red-400 hover:underline flex items-center gap-1 font-mono text-[10px] cursor-pointer">
+                  <i class="fa-brands fa-youtube"></i> YouTube
+                </button>
               </div>
             </div>
           </div>
@@ -538,6 +545,36 @@
     </div>
   </div>
 
+  <!-- Spotify Export Modal -->
+  <div id="spotifyExportModal" role="dialog" aria-modal="true" aria-labelledby="spotifyModalTitle" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="bg-spotify-card border border-spotify-border rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between mb-4 pb-3 border-b border-spotify-border">
+        <h3 id="spotifyModalTitle" class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-brands fa-spotify text-emerald-400" aria-hidden="true"></i> Export to Spotify
+        </h3>
+        <button onclick="closeSpotifyExportModal()" aria-label="Close modal" class="text-neutral-400 hover:text-white text-sm p-1 rounded transition"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <div id="spotifyExportContent" class="flex flex-col gap-3">
+        <!-- Dynamically populated -->
+      </div>
+    </div>
+  </div>
+
+  <!-- YouTube Export Modal -->
+  <div id="youtubeExportModal" role="dialog" aria-modal="true" aria-labelledby="youtubeModalTitle" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="bg-spotify-card border border-spotify-border rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between mb-4 pb-3 border-b border-spotify-border">
+        <h3 id="youtubeModalTitle" class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-brands fa-youtube text-red-400" aria-hidden="true"></i> Export to YouTube
+        </h3>
+        <button onclick="closeYouTubeExportModal()" aria-label="Close modal" class="text-neutral-400 hover:text-white text-sm p-1 rounded transition"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <div id="youtubeExportContent" class="flex flex-col gap-3">
+        <!-- Dynamically populated -->
+      </div>
+    </div>
+  </div>
+
   <script>
     let activeJob = null;
     let ws = null;
@@ -582,10 +619,12 @@
       // Escape to close modals
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
-          const modal = document.getElementById("muzpaModal");
-          if (modal && !modal.classList.contains("hidden")) {
-            closeMuzpaModal();
-          }
+          const m1 = document.getElementById("muzpaModal");
+          if (m1 && !m1.classList.contains("hidden")) closeMuzpaModal();
+          const m2 = document.getElementById("spotifyExportModal");
+          if (m2 && !m2.classList.contains("hidden")) closeSpotifyExportModal();
+          const m3 = document.getElementById("youtubeExportModal");
+          if (m3 && !m3.classList.contains("hidden")) closeYouTubeExportModal();
         }
       });
     }
@@ -961,6 +1000,83 @@
       document.getElementById("djSetStatusText").className = "text-rose-400 font-mono";
     }
 
+    function parseTimeToSeconds(ts) {
+      if (!ts) return 0;
+      try {
+        const parts = ts.trim().split(":").map(Number);
+        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        if (parts.length === 2) return parts[0] * 60 + parts[1];
+      } catch (e) {}
+      return 0;
+    }
+
+    function getYouTubeVideoId(url) {
+      if (!url) return null;
+      const m = url.match(/(?:v=|\/|youtu\.be\/)([0-9A-Za-z_-]{11})/);
+      return m ? m[1] : null;
+    }
+
+    function escapeAttr(unsafe) {
+      if (!unsafe) return "";
+      return String(unsafe).replace(/'/g, "\\'").replace(/"/g, "&quot;");
+    }
+
+    function openInSpotify(idOrUri, webUrl) {
+      if (!idOrUri) {
+        if (webUrl) window.open(webUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      let uri = String(idOrUri).trim();
+      if (!uri.startsWith("spotify:")) {
+        uri = `spotify:track:${uri}`;
+      }
+      let fallback = webUrl;
+      if (!fallback) {
+        const rawId = uri.replace("spotify:track:", "").replace("spotify:playlist:", "");
+        fallback = uri.includes("playlist") 
+          ? `https://open.spotify.com/playlist/${rawId}` 
+          : `https://open.spotify.com/track/${rawId}`;
+      }
+
+      let appOpened = false;
+      const onBlur = () => { appOpened = true; };
+      window.addEventListener("blur", onBlur, { once: true });
+
+      // Attempt to launch Spotify native desktop application
+      window.location.href = uri;
+
+      // Check if focus was captured by desktop app; if not, open browser web player
+      setTimeout(() => {
+        window.removeEventListener("blur", onBlur);
+        if (!appOpened && !document.hidden) {
+          window.open(fallback, "_blank", "noopener,noreferrer");
+        }
+      }, 1200);
+    }
+
+    function openInYouTube(urlOrQuery) {
+      if (!urlOrQuery) return;
+      let target = String(urlOrQuery).trim();
+      if (!target.startsWith("http")) {
+        target = `https://www.youtube.com/results?search_query=${encodeURIComponent(target)}`;
+      }
+      window.open(target, "_blank", "noopener,noreferrer");
+    }
+
+    function openActiveSpotifyTrack() {
+      if (!activeJob || !activeJob.tracks || activeJob.current_track_index === undefined) return;
+      const tr = activeJob.tracks[activeJob.current_track_index]?.spotify_track;
+      if (!tr) return;
+      openInSpotify(tr.id, tr.spotify_url);
+    }
+
+    function openActiveYouTubeTrack() {
+      if (!activeJob || !activeJob.tracks || activeJob.current_track_index === undefined) return;
+      const tr = activeJob.tracks[activeJob.current_track_index]?.spotify_track;
+      if (!tr) return;
+      openInYouTube(`${tr.artist} - ${tr.title}`);
+    }
+
     function renderDjSetTracks(tracks) {
       const wrap = document.getElementById("djSetTracksWrap");
       wrap.classList.remove("hidden");
@@ -981,9 +1097,22 @@
         const hasSpotify = !!t.spotify_id;
         const bpmBadge = t.bpm ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-neutral-800 text-neutral-300 border border-neutral-700">${t.bpm} BPM</span>` : '';
         const camelotBadge = t.camelot_key ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30">${t.camelot_key}</span>` : '';
+        
         const spotifyBadge = hasSpotify 
-          ? `<a href="${t.spotify_url}" target="_blank" rel="noopener noreferrer" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition flex items-center gap-1"><i class="fa-brands fa-spotify"></i> Spotify</a>` 
+          ? `<button onclick="openInSpotify('${t.spotify_id}', '${escapeAttr(t.spotify_url || '')}')" title="Open track in Spotify App (or Web)" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition flex items-center gap-1 cursor-pointer"><i class="fa-brands fa-spotify"></i> Spotify</button>` 
           : `<span class="px-2 py-0.5 rounded text-[10px] font-mono text-neutral-500 bg-neutral-800/60">Unmatched</span>`;
+
+        let ytUrl = t.youtube_url;
+        if (!ytUrl) {
+          const ytId = activeDjSetJob && activeDjSetJob.source_url ? getYouTubeVideoId(activeDjSetJob.source_url) : null;
+          if (ytId && t.timestamp) {
+            const sec = parseTimeToSeconds(t.timestamp);
+            ytUrl = `https://www.youtube.com/watch?v=${ytId}&t=${sec}s`;
+          } else {
+            ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(t.artist + ' - ' + t.title)}`;
+          }
+        }
+        const youtubeBadge = `<button onclick="openInYouTube('${escapeAttr(ytUrl)}')" title="Listen on YouTube" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition flex items-center gap-1 cursor-pointer"><i class="fa-brands fa-youtube"></i> YouTube</button>`;
 
         const timeStr = t.end_timestamp ? `${t.timestamp} – ${t.end_timestamp}` : t.timestamp;
 
@@ -998,7 +1127,8 @@
             ${bpmBadge}
             ${camelotBadge}
             ${spotifyBadge}
-            <button onclick="removeDjSetTrack(${idx})" title="Remove track" class="text-neutral-500 hover:text-rose-400 p-1 transition text-xs">
+            ${youtubeBadge}
+            <button onclick="removeDjSetTrack(${idx})" title="Remove track" class="text-neutral-500 hover:text-rose-400 p-1 transition text-xs cursor-pointer">
               <i class="fa-solid fa-trash"></i>
             </button>
           </div>
@@ -1025,23 +1155,245 @@
       });
     }
 
+    // Spotify & YouTube Export Handlers
+    function closeSpotifyExportModal() {
+      const modal = document.getElementById("spotifyExportModal");
+      if (modal) modal.classList.add("hidden");
+    }
+
+    function closeYouTubeExportModal() {
+      const modal = document.getElementById("youtubeExportModal");
+      if (modal) modal.classList.add("hidden");
+    }
+
+    function copyTrackUris(uris) {
+      if (!uris || uris.length === 0) {
+        alert("No Spotify track URIs available.");
+        return;
+      }
+      const text = Array.isArray(uris) ? uris.join("\n") : uris;
+      navigator.clipboard.writeText(text).then(() => {
+        alert(`✓ Copied ${Array.isArray(uris) ? uris.length : ''} Spotify URIs to clipboard!\n\nTo use: Open Spotify desktop app, click into any playlist, and press Cmd+V (or Ctrl+V) to paste!`);
+      });
+    }
+
+    function copyTracklistText(text) {
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        alert("✓ Formatted YouTube tracklist copied to clipboard!");
+      });
+    }
+
+    let spotifyAuthPollInterval = null;
+    function connectSpotifyAndExport(authUrl) {
+      if (!authUrl) return;
+      const width = 550, height = 750;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      const authWin = window.open(authUrl, "spotifyAuth", `width=${width},height=${height},left=${left},top=${top}`);
+
+      if (spotifyAuthPollInterval) clearInterval(spotifyAuthPollInterval);
+      spotifyAuthPollInterval = setInterval(async () => {
+        try {
+          const res = await fetch("/api/spotify/status");
+          const data = await res.json();
+          if (data.is_authenticated) {
+            clearInterval(spotifyAuthPollInterval);
+            spotifyAuthPollInterval = null;
+            if (authWin && !authWin.closed) authWin.close();
+            exportDjSetToSpotify();
+          }
+        } catch (e) {}
+      }, 1500);
+
+      window.addEventListener("message", function onAuthMessage(e) {
+        if (e.data && e.data.type === "spotify_auth_success") {
+          window.removeEventListener("message", onAuthMessage);
+          if (spotifyAuthPollInterval) {
+            clearInterval(spotifyAuthPollInterval);
+            spotifyAuthPollInterval = null;
+          }
+          exportDjSetToSpotify();
+        }
+      });
+    }
+
     async function exportDjSetToSpotify() {
       if (!activeDjSetJob) return;
+      const btn = document.getElementById("exportSpotifyBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-emerald-400"></i> Exporting...`;
+      }
+
       try {
         const res = await fetch("/api/djset/export-spotify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            job_id: activeDjSetJob.job_id,
+            playlist_name: `DJ Set — ${activeDjSetJob.title}`
+          })
+        });
+        const data = await res.json();
+        showSpotifyExportModal(data);
+      } catch (e) {
+        alert("Spotify export error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    function showSpotifyExportModal(data) {
+      const modal = document.getElementById("spotifyExportModal");
+      const content = document.getElementById("spotifyExportContent");
+      if (!modal || !content) return;
+
+      if (data.created) {
+        content.innerHTML = `
+          <div class="text-center py-2">
+            <div class="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3 text-2xl border border-emerald-500/30">
+              <i class="fa-solid fa-check"></i>
+            </div>
+            <h4 class="text-base font-bold text-white mb-1">Playlist Created Successfully!</h4>
+            <p class="text-xs text-neutral-400 mb-4 font-mono">
+              "${escapeHtml(data.playlist_name)}" with ${data.matched_tracks} tracks added.
+            </p>
+            <div class="flex flex-col gap-2.5">
+              <button onclick="openInSpotify('${data.playlist_uri}', '${escapeAttr(data.playlist_url)}')" class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
+                <i class="fa-brands fa-spotify text-base"></i> Open in Spotify Desktop App
+              </button>
+              <a href="${data.playlist_url}" target="_blank" rel="noopener noreferrer" class="w-full py-2 px-4 rounded-xl bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-neutral-200 font-semibold text-xs flex items-center justify-center gap-2 transition text-center">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i> Open in Spotify Web
+              </a>
+              <button onclick='copyTrackUris(${JSON.stringify(data.track_uris)})' class="w-full py-2 px-4 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-white/5 text-neutral-300 font-mono text-xs flex items-center justify-center gap-2 transition cursor-pointer">
+                <i class="fa-solid fa-clipboard text-emerald-400"></i> Copy Track URIs (Cmd+V)
+              </button>
+            </div>
+          </div>
+        `;
+      } else if (data.status === "auth_required") {
+        content.innerHTML = `
+          <div class="py-2">
+            <div class="flex items-center gap-3 mb-3 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <i class="fa-brands fa-spotify text-2xl text-emerald-400 shrink-0"></i>
+              <div>
+                <h4 class="text-xs font-bold text-white">Connect Your Spotify Account</h4>
+                <p class="text-[11px] text-spotify-muted">Authorize once to create playlists directly in your library.</p>
+              </div>
+            </div>
+            
+            <p class="text-xs text-neutral-300 mb-4 leading-relaxed">
+              Found <span class="text-emerald-400 font-bold font-mono">${data.matched_tracks}</span> matching tracks on Spotify. You can link your account for 1-click automatic playlist creation, or instantly copy the track URIs to paste into Spotify.
+            </p>
+
+            <div class="flex flex-col gap-2.5">
+              <button onclick="connectSpotifyAndExport('${data.auth_url}')" class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
+                <i class="fa-solid fa-link"></i> Link Spotify Account & Create Playlist
+              </button>
+              <div class="flex items-center gap-2 my-1 text-[10px] text-neutral-500 font-mono uppercase justify-center">
+                <div class="h-px bg-neutral-800 flex-1"></div> or paste directly <div class="h-px bg-neutral-800 flex-1"></div>
+              </div>
+              <button onclick='copyTrackUris(${JSON.stringify(data.track_uris)})' class="w-full py-2 px-4 rounded-xl bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-neutral-200 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer">
+                <i class="fa-solid fa-clipboard text-emerald-400"></i> Copy Track URIs to Clipboard (Cmd+V)
+              </button>
+              <p class="text-[10px] text-neutral-400 text-center font-mono">
+                💡 Tip: Open Spotify app, create a playlist, and press <strong>Cmd+V</strong> (or Ctrl+V) to paste tracks!
+              </p>
+            </div>
+          </div>
+        `;
+      } else {
+        content.innerHTML = `
+          <div class="py-2">
+            <h4 class="text-xs font-bold text-white mb-2">Manual Tracklist Export</h4>
+            <p class="text-xs text-neutral-300 mb-4 leading-relaxed">
+              Found <span class="text-emerald-400 font-bold font-mono">${data.matched_tracks}</span> matching tracks. Copy the URIs below and press Cmd+V in any Spotify playlist.
+            </p>
+            <div class="flex flex-col gap-2.5">
+              <button onclick='copyTrackUris(${JSON.stringify(data.track_uris)})' class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
+                <i class="fa-solid fa-clipboard"></i> Copy ${data.matched_tracks} Track URIs (Cmd+V)
+              </button>
+            </div>
+          </div>
+        `;
+      }
+
+      modal.classList.remove("hidden");
+    }
+
+    async function exportDjSetToYouTube() {
+      if (!activeDjSetJob) return;
+      const btn = document.getElementById("exportYouTubeBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-red-400"></i> Resolving YouTube IDs...`;
+      }
+
+      try {
+        const res = await fetch("/api/djset/export-youtube", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ job_id: activeDjSetJob.job_id })
         });
         const data = await res.json();
-        if (data.status === "success") {
-          alert(`✓ Found ${data.matched_tracks} tracks matching on Spotify! Ready to download.`);
-        } else {
-          alert(data.message || "Spotify export ready.");
-        }
+        showYouTubeExportModal(data);
       } catch (e) {
-        alert("Export error: " + e.message);
+        alert("YouTube export error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
       }
+    }
+
+    function showYouTubeExportModal(data) {
+      const modal = document.getElementById("youtubeExportModal");
+      const content = document.getElementById("youtubeExportContent");
+      if (!modal || !content) return;
+
+      const hasUrl = !!data.playlist_url;
+      content.innerHTML = `
+        <div class="py-2">
+          <div class="flex items-center gap-3 mb-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+            <i class="fa-brands fa-youtube text-2xl text-red-400 shrink-0"></i>
+            <div>
+              <h4 class="text-xs font-bold text-white">YouTube Playlist Queue</h4>
+              <p class="text-[11px] text-spotify-muted">
+                Resolved ${data.resolved_tracks || 0} of ${data.total_tracks || 0} tracks.
+              </p>
+            </div>
+          </div>
+
+          <p class="text-xs text-neutral-300 mb-4 leading-relaxed">
+            YouTube will load all tracks sequentially in a continuous playlist queue. You can listen right away or click the <span class="text-white font-bold">+ Save playlist</span> button on the player to save it to your YouTube library.
+          </p>
+
+          <div class="flex flex-col gap-2.5">
+            ${hasUrl ? `
+            <button onclick="window.open('${data.playlist_url}', '_blank', 'noopener,noreferrer')" class="w-full py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-red-600/20 cursor-pointer">
+              <i class="fa-solid fa-play"></i> Open YouTube Playlist Queue (${data.resolved_tracks} tracks)
+            </button>
+            ` : `
+            <div class="text-xs text-amber-400 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+              Unable to generate direct multi-video queue, but you can copy the full tracklist below.
+            </div>
+            `}
+
+            <button onclick='copyTracklistText(${JSON.stringify(data.tracklist_text)})' class="w-full py-2 px-4 rounded-xl bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-neutral-200 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer">
+              <i class="fa-solid fa-copy text-red-400"></i> Copy Formatted Tracklist
+            </button>
+          </div>
+        </div>
+      `;
+
+      modal.classList.remove("hidden");
     }
 
     async function sendDjSetToMuzpa() {
@@ -1680,6 +2032,12 @@
             ${tr.camelot_key ? `<span class="text-[9px] font-mono font-bold text-amber-300 bg-amber-950/80 border border-amber-700/60 px-1.5 py-0.5 rounded shadow-sm" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5 text-amber-400" aria-hidden="true"></i>${tr.camelot_key}</span>` : '<span class="text-[8px] font-mono text-neutral-600 bg-neutral-900/60 border border-white/5 px-1 py-0.5 rounded" title="Key not detected">-- Key</span>'}
             <span class="text-[10px] font-mono text-neutral-500">${tr.duration_str}</span>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full ${statusClass}">${statusIcon}${t.status}</span>
+            <button onclick="event.stopPropagation(); openInSpotify('${tr.id}', '${escapeAttr(tr.spotify_url || '')}')" title="Open track in Spotify App (or Web)" aria-label="Open in Spotify" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-emerald-400 p-1 rounded text-xs transition">
+              <i class="fa-brands fa-spotify" aria-hidden="true"></i>
+            </button>
+            <button onclick="event.stopPropagation(); openInYouTube('${escapeAttr(tr.artist + ' - ' + tr.title)}')" title="Listen on YouTube" aria-label="Listen on YouTube" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 p-1 rounded text-xs transition">
+              <i class="fa-brands fa-youtube" aria-hidden="true"></i>
+            </button>
             <button onclick="applyDjSort('${tr.id}', event)" title="Harmonically sort playlist starting from this track as opener" aria-label="Start DJ set from ${escapeHtml(tr.title)}" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-amber-400 p-1 rounded text-xs transition">
               <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
             </button>
@@ -1708,7 +2066,15 @@
         durationHtml += ` • <span class="text-amber-300 font-mono"><i class="fa-solid fa-music text-[10px]" aria-hidden="true"></i> ${tr.camelot_key}${tr.musical_key ? ' (' + tr.musical_key + ')' : ''}</span>`;
       }
       document.getElementById("activeDuration").innerHTML = durationHtml;
-      document.getElementById("activeSpotifyLink").href = tr.spotify_url || "#";
+      
+      const spotBtn = document.getElementById("activeSpotifyBtn");
+      if (spotBtn) {
+        spotBtn.onclick = () => openInSpotify(tr.id, tr.spotify_url);
+      }
+      const ytBtn = document.getElementById("activeYouTubeBtn");
+      if (ytBtn) {
+        ytBtn.onclick = () => openInYouTube(`${tr.artist} - ${tr.title}`);
+      }
       
       if (tr.image_url) {
         document.getElementById("activeCover").src = tr.image_url;

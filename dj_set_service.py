@@ -808,3 +808,118 @@ class DJSetService:
             self.active_jobs[job_id].status = "cancelled"
             return True
         return False
+
+    async def resolve_youtube_playlist(
+        self,
+        job_id: str,
+        max_workers: int = 4
+    ) -> Dict[str, Any]:
+        """
+        Resolves individual YouTube video IDs for tracks in a DJ set.
+        Returns the YouTube multi-track playlist queue URL (https://www.youtube.com/watch_videos?video_ids=...)
+        and individual track video IDs / URLs.
+        """
+        job = self.active_jobs.get(job_id)
+        if not job:
+            raise ValueError(f"DJ Set job '{job_id}' not found.")
+
+        loop = asyncio.get_running_loop()
+        import yt_dlp
+        import urllib.parse
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Determine if original source was YouTube
+        set_video_id = None
+        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", job.source_url)
+        if match and ("youtube.com" in job.source_url or "youtu.be" in job.source_url):
+            set_video_id = match.group(1)
+
+        def _to_seconds(ts: str) -> int:
+            try:
+                parts = ts.strip().split(":")
+                if len(parts) == 3:
+                    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                elif len(parts) == 2:
+                    return int(parts[0]) * 60 + int(parts[1])
+            except Exception:
+                pass
+            return 0
+
+        def _search_single_track(track: DJSetTrackItem) -> Tuple[DJSetTrackItem, Optional[str]]:
+            if track.youtube_id:
+                return track, track.youtube_id
+
+            clean_artist = track.artist.strip()
+            clean_title = track.title.strip()
+            query = f"{clean_artist} - {clean_title}"
+            ydl_opts = {
+                "extract_flat": True,
+                "skip_download": True,
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "cacert": certifi.where(),
+                "socket_timeout": 6,
+                "http_headers": {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "web"]
+                    }
+                }
+            }
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+                    entries = (info or {}).get("entries") or []
+                    if entries and entries[0] and entries[0].get("id"):
+                        vid = entries[0]["id"]
+                        track.youtube_id = vid
+                        track.youtube_url = f"https://www.youtube.com/watch?v={vid}"
+                        return track, vid
+            except Exception as e:
+                logger.debug(f"yt-dlp video ID search failed for '{query}': {e}")
+
+            # If original set is YouTube and we have a timestamp, point to the exact moment in the set
+            if set_video_id and track.timestamp:
+                sec = _to_seconds(track.timestamp)
+                track.youtube_url = f"https://www.youtube.com/watch?v={set_video_id}&t={sec}s"
+            else:
+                track.youtube_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(query)}"
+
+            return track, None
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [loop.run_in_executor(executor, _search_single_track, t) for t in job.tracks]
+            results = await asyncio.gather(*futures, return_exceptions=True)
+
+        video_ids: List[str] = []
+        for r in results:
+            if isinstance(r, tuple):
+                _, vid = r
+                if vid:
+                    video_ids.append(vid)
+
+        playlist_url = None
+        if video_ids:
+            playlist_url = f"https://www.youtube.com/watch_videos?video_ids={','.join(video_ids)}"
+
+        # Prepare formatted tracklist
+        tracklist_text_lines = []
+        for idx, t in enumerate(job.tracks):
+            time_part = f"[{t.timestamp}] " if t.timestamp else ""
+            line = f"{idx+1}. {time_part}{t.artist} - {t.title}"
+            tracklist_text_lines.append(line)
+
+        return {
+            "status": "success",
+            "playlist_name": job.title,
+            "total_tracks": len(job.tracks),
+            "resolved_tracks": len(video_ids),
+            "video_ids": video_ids,
+            "playlist_url": playlist_url,
+            "tracklist_text": "\n".join(tracklist_text_lines)
+        }
+

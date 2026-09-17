@@ -225,7 +225,13 @@ Para extraer el tracklist completo de sesiones de DJs, sets en vivo (Cercle, Boi
 4. Haz clic en **"Identify Tracklist"**:
    - **Capa Heurística:** Si el set tiene marcas de tiempo en la descripción, capítulos o comentarios fijados, se extraen instantáneamente en < 2 segundos.
    - **Capa Acústica Adaptativa (Shazam):** Si el set no tiene lista de temas escrita, el sistema descarga el stream en segundo plano, corta fragmentos inteligentes con `ffmpeg`, los identifica con huellas acústicas nativas de Shazam evitando rate-limits mediante saltos adaptativos de 3 minutos, y enriquece cada track con BPM, Tonalidad Camelot (ej. `8A`, `11B`) y carátula oficial de Spotify.
-5. Puedes exportar el tracklist a texto, sincronizarlo con Spotify o hacer clic en **"Download in Muzpa"** para descargar automáticamente todos los MP3 a 320 kbps.
+5. **Reproducción directa y Exportación:**
+   - **Spotify App-First:** Al hacer clic en "Spotify" en cualquier track o en la tarjeta de Spotlight, se intenta abrir de inmediato la aplicación oficial de Spotify de escritorio (`spotify:track:...`); si no está instalada, abre automáticamente la versión web.
+   - **YouTube:** Abre el video directamente en la marca de tiempo exacta del DJ set (si la fuente es YouTube) o la búsqueda del tema.
+   - **Export to Spotify:** Crea automáticamente la playlist con título, descripción y tracks en tu cuenta de Spotify vinculada vía OAuth, o te permite copiar los URIs al portapapeles con 1 clic para pegarlos con `Cmd+V` (o `Ctrl+V`) en cualquier playlist de Spotify.
+   - **Export to YouTube:** Resuelve los IDs de video y genera una cola de reproducción multi-video continua (`https://www.youtube.com/watch_videos?video_ids=...`), lista para reproducir o guardar con el botón "+ Guardar playlist" de YouTube sin requerir claves de API complejas.
+   - **Download in Muzpa:** Envía la lista de temas directamente a la cola de búsqueda y descarga automática de MP3s a 320 kbps.
+
 
 ---
 

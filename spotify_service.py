@@ -4,13 +4,14 @@ Handles Spotify Web API authentication, playlist extraction, automatic paginatio
 and resilient web-embed fallback to ensure 100% extraction success.
 """
 
+import os
 import re
 import json
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 import requests
 import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth, CacheFileHandler
 
 from config import settings
 from models import SpotifyTrack
@@ -23,7 +24,9 @@ class SpotifyService:
         self.client_id = client_id or settings.SPOTIFY_CLIENT_ID
         self.client_secret = client_secret or settings.SPOTIFY_CLIENT_SECRET
         self._sp: Optional[spotipy.Spotify] = None
+        self._oauth_manager: Optional[SpotifyOAuth] = None
         self._initialize_client()
+        self._initialize_oauth_manager()
 
     def _initialize_client(self) -> None:
         if not self.client_id or not self.client_secret:
@@ -40,6 +43,25 @@ class SpotifyService:
         except Exception as e:
             logger.warning(f"Notice initializing Spotify client: {e}")
             self._sp = None
+
+    def _initialize_oauth_manager(self) -> None:
+        if not self.client_id or not self.client_secret:
+            return
+
+        try:
+            cache_path = os.path.join(os.path.dirname(__file__), ".spotify_user_cache")
+            cache_handler = CacheFileHandler(cache_path=cache_path)
+            self._oauth_manager = SpotifyOAuth(
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                redirect_uri="http://127.0.0.1:8000/api/spotify/callback",
+                scope="playlist-modify-public playlist-modify-private user-read-private",
+                cache_handler=cache_handler,
+                open_browser=False
+            )
+        except Exception as e:
+            logger.warning(f"Notice initializing SpotifyOAuth manager: {e}")
+            self._oauth_manager = None
 
     @staticmethod
     def extract_playlist_id(url_or_uri: str) -> str:
@@ -221,4 +243,102 @@ class SpotifyService:
                     enrich_track_audio_features(t, allow_network=True)
                 except Exception as ex:
                     logger.debug(f"Audio enrichment notice for '{t.title}': {ex}")
+
+    def get_user_auth_url(self) -> Optional[str]:
+        """Returns Spotify OAuth authorization URL for user login."""
+        if not self._oauth_manager:
+            return None
+        try:
+            return self._oauth_manager.get_authorize_url()
+        except Exception as e:
+            logger.error(f"Failed to generate Spotify authorize URL: {e}")
+            return None
+
+    def handle_auth_callback(self, code: str) -> bool:
+        """Handles OAuth callback code and caches user tokens."""
+        if not self._oauth_manager:
+            return False
+        try:
+            token = self._oauth_manager.get_access_token(code=code, as_dict=True)
+            return token is not None and "access_token" in token
+        except Exception as e:
+            logger.error(f"Error exchanging Spotify auth code: {e}")
+            return False
+
+    def get_user_client(self) -> Optional[spotipy.Spotify]:
+        """Returns an authenticated spotipy.Spotify instance for the current user if token is valid/cached."""
+        if not self._oauth_manager:
+            return None
+        try:
+            cached = self._oauth_manager.cache_handler.get_cached_token() if hasattr(self._oauth_manager, "cache_handler") else self._oauth_manager.get_cached_token()
+            if not cached:
+                return None
+            valid_token = self._oauth_manager.validate_token(cached)
+            if not valid_token:
+                return None
+            return spotipy.Spotify(auth=valid_token["access_token"])
+        except Exception as e:
+            logger.warning(f"Failed to get authorized user Spotify client: {e}")
+            return None
+
+    def is_user_authenticated(self) -> bool:
+        """Checks if a valid user token is available."""
+        return self.get_user_client() is not None
+
+    def create_user_playlist(
+        self,
+        name: str,
+        description: str = "",
+        track_ids_or_uris: Optional[List[str]] = None,
+        public: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """Creates a playlist in the user's Spotify account and adds the specified tracks."""
+        user_sp = self.get_user_client()
+        if not user_sp:
+            logger.warning("No authenticated user client available to create playlist.")
+            return None
+
+        try:
+            user_info = user_sp.current_user()
+            user_id = user_info.get("id")
+            if not user_id:
+                logger.error("Could not retrieve current Spotify user profile.")
+                return None
+
+            playlist = user_sp.user_playlist_create(
+                user=user_id,
+                name=name,
+                public=public,
+                description=description or "Generated with Spotify2Muzpa Studio"
+            )
+            playlist_id = playlist["id"]
+
+            uris: List[str] = []
+            if track_ids_or_uris:
+                for item in track_ids_or_uris:
+                    if not item:
+                        continue
+                    clean_item = item.strip()
+                    if clean_item.startswith("spotify:track:"):
+                        uris.append(clean_item)
+                    elif clean_item.startswith("spotify:"):
+                        uris.append(clean_item)
+                    else:
+                        uris.append(f"spotify:track:{clean_item}")
+
+                for i in range(0, len(uris), 100):
+                    chunk = uris[i:i + 100]
+                    user_sp.playlist_add_items(playlist_id, chunk)
+
+            return {
+                "playlist_id": playlist_id,
+                "playlist_url": playlist.get("external_urls", {}).get("spotify", f"https://open.spotify.com/playlist/{playlist_id}"),
+                "playlist_uri": f"spotify:playlist:{playlist_id}",
+                "name": playlist.get("name", name),
+                "tracks_added": len(uris)
+            }
+        except Exception as e:
+            logger.error(f"Failed to create user Spotify playlist: {e}")
+            return None
+
 

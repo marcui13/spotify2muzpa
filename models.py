@@ -122,6 +122,9 @@ class DJSetTrackItem(BaseModel):
     musical_key: Optional[str] = Field(default=None, description="Musical key e.g. A Minor")
     camelot_key: Optional[str] = Field(default=None, description="Camelot key e.g. 8A, 11B")
     preview_url: Optional[str] = Field(default=None, description="30s preview URL")
+    youtube_id: Optional[str] = Field(default=None, description="Matched YouTube video ID")
+    youtube_url: Optional[str] = Field(default=None, description="Direct or search YouTube URL")
+
 
 
 class DJSetJob(BaseModel):
