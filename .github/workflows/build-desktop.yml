@@ -15,6 +15,11 @@ jobs:
   test:
     name: Run Quality Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HEADLESS: "true"
+      AUTO_LAUNCH_BROWSER: "false"
+      CI: "true"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,15 +34,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest-timeout
 
       - name: Run Pytest suite
         run: |
-          PYTHONPATH=. pytest -v tests
+          PYTHONPATH=. pytest -v tests --timeout=30
 
   build-windows:
     name: Build Windows (.exe)
     needs: test
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,6 +77,7 @@ jobs:
     name: Build macOS (.dmg)
     needs: test
     runs-on: macos-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
