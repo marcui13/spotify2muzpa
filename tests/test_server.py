@@ -14,6 +14,11 @@ def test_index_page(client):
     assert "Spotify to Muzpa" in response.text
 
 
+def test_favicon(client):
+    response = client.get("/favicon.ico")
+    assert response.status_code == 204
+
+
 def test_get_state_empty(client):
     response = client.get("/api/state")
     assert response.status_code == 200

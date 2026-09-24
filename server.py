@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
