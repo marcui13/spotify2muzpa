@@ -1,0 +1,13 @@
+{
+  "app_enabled": true,
+  "min_version": "1.0.0",
+  "status_message": "Spotify2Muzpa Studio Beta",
+  "blocked_message": "La plataforma se encuentra temporalmente en pausa por mantenimiento. Por favor intenta más tarde.",
+  "allowed_keys": [
+    "BETA-VIP-2026",
+    "BETA-AMIGO-01",
+    "BETA-AMIGO-02",
+    "BETA-AMIGO-03",
+    "BETA-TESTER"
+  ]
+}

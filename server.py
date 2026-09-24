@@ -42,6 +42,7 @@ from spotify_service import SpotifyService
 from dj_set_service import DJSetService
 from muzpa_crawler import MuzpaCrawlerEngine, detect_available_browsers
 from downloader import MuzpaDownloader, StateManager, DownloadQueueManager
+from access_service import access_manager, AccessStatus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -373,6 +374,10 @@ app.add_middleware(
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
+        # Push initial access status to UI
+        access_status = await access_manager.check_access()
+        await websocket.send_json({"type": "access_status", "data": access_status})
+
         if orchestrator.current_job:
             await websocket.send_json({"type": "initial_state", "data": orchestrator.current_job.model_dump()})
         await websocket.send_json({"type": "log_history", "data": log_handler.log_history})
@@ -381,6 +386,44 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+async def verify_access_or_raise():
+    """Verifies that the application is authorized and active, or raises 403."""
+    status = await access_manager.check_access()
+    if not status["is_authorized"] and settings.ENABLE_ACCESS_CONTROL:
+        raise HTTPException(
+            status_code=403,
+            detail=status["message"]
+        )
+    return status
+
+
+@app.get("/api/access/status")
+async def get_access_status(refresh: bool = False):
+    """Returns remote access status, kill-switch state, and activation information."""
+    return await access_manager.check_access(force_refresh=refresh)
+
+
+@app.post("/api/access/activate")
+async def activate_access(payload: Dict[str, Any]):
+    """Validates and activates a user's beta invitation key."""
+    key = payload.get("key", "").strip()
+    success, message = await access_manager.activate_key(key)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    status = await access_manager.check_access(force_refresh=True)
+    await manager.broadcast({"type": "access_updated", "data": status})
+    return {"status": "success", "message": message, "access": status}
+
+
+@app.post("/api/access/deactivate")
+async def deactivate_access():
+    """Deactivates local license."""
+    access_manager.deactivate_key()
+    status = await access_manager.check_access(force_refresh=True)
+    await manager.broadcast({"type": "access_updated", "data": status})
+    return {"status": "success", "access": status}
 
 
 @app.get("/api/browser/list")
@@ -453,6 +496,7 @@ async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
 @app.post("/api/playlist/load")
 async def load_playlist(payload: Dict[str, Any]):
     """Loads tracks from Spotify URL, initializes or restores job (or forces fresh reload if force_fresh=True)."""
+    await verify_access_or_raise()
     url = payload.get("playlist_url")
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'playlist_url' in request.")
@@ -875,6 +919,7 @@ async def update_config(req: ConfigUpdateRequest):
 @app.post("/api/djset/analyze")
 async def analyze_dj_set(payload: DJSetAnalyzeRequest):
     """Starts asynchronous DJ set analysis for a YouTube/SoundCloud URL or local set."""
+    await verify_access_or_raise()
     url = payload.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'url' in request.")
@@ -951,6 +996,7 @@ async def cancel_dj_set(job_id: str):
 @app.post("/api/djset/to-playlist")
 async def dj_set_to_playlist(payload: DJSetToPlaylistRequest):
     """Converts analyzed DJ set tracklist into an active PlaylistJob and begins Muzpa crawling."""
+    await verify_access_or_raise()
     try:
         target_id = payload.job_id
         if target_id not in dj_set_service.active_jobs and dj_set_service.active_jobs:

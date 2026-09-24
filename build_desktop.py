@@ -46,6 +46,7 @@ def build_pyinstaller():
     # Data files to bundle
     static_data = f"{BASE_DIR / 'static'}{sep}static"
     env_data = f"{BASE_DIR / '.env.example'}{sep}."
+    access_data = f"{BASE_DIR / 'access_control.json'}{sep}."
     
     cache_dir = BASE_DIR / ".pyinstaller_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -60,6 +61,8 @@ def build_pyinstaller():
         "--workpath", str(BUILD_DIR),
         "--add-data", static_data,
         "--add-data", env_data,
+        "--add-data", access_data,
+        "--hidden-import", "access_service",
         "--hidden-import", "uvicorn.logging",
         "--hidden-import", "uvicorn.loops",
         "--hidden-import", "uvicorn.loops.auto",

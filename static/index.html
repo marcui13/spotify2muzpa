@@ -75,6 +75,10 @@
         <h1 class="text-sm md:text-base font-bold tracking-tight text-white flex items-center gap-2">
           Spotify <i class="fa-solid fa-arrow-right text-xs text-spotify" aria-hidden="true"></i> Muzpa Studio
           <span class="text-[10px] bg-spotify/20 text-spotify px-2 py-0.5 rounded-full font-mono font-medium border border-spotify/30">v2.0 Native</span>
+          <button onclick="openActivationModal(true)" id="licenseBadge" title="Estado de licencia / Invitación" class="hidden text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border cursor-pointer transition flex items-center gap-1">
+            <i class="fa-solid fa-shield-halved text-[9px]"></i>
+            <span id="licenseBadgeText">Beta</span>
+          </button>
         </h1>
         <p class="text-xs text-spotify-muted">Automated Fuzzy Crawler & DJ Audio Downloader</p>
       </div>
@@ -578,6 +582,61 @@
     </div>
   </div>
 
+  <!-- Remote Access & Activation Modal -->
+  <div id="activationModal" role="dialog" aria-modal="true" aria-labelledby="activationModalTitle" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
+    <div class="bg-spotify-card border border-spotify-border rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between mb-4 pb-3 border-b border-spotify-border">
+        <h3 id="activationModalTitle" class="text-base font-bold text-white flex items-center gap-2">
+          <i id="activationModalIcon" class="fa-solid fa-shield-halved text-spotify" aria-hidden="true"></i>
+          <span id="activationModalHeading">Activación de Acceso</span>
+        </h3>
+        <button id="closeActivationBtn" onclick="closeActivationModal()" aria-label="Cerrar modal" class="hidden text-neutral-400 hover:text-white text-sm p-1 rounded transition">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <!-- Kill-Switch / Blocked Banner -->
+      <div id="killSwitchBanner" class="hidden flex flex-col items-center text-center p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl mb-4">
+        <div class="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-2xl mb-2">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <h4 class="text-sm font-bold text-white mb-1">Acceso Temporalmente Pausado</h4>
+        <p id="killSwitchMessage" class="text-xs text-neutral-300"></p>
+        <button onclick="fetchAccessStatus(true)" class="mt-4 bg-spotify-light hover:bg-neutral-700 text-white text-xs font-semibold px-4 py-2 rounded-xl border border-spotify-border transition flex items-center gap-2">
+          <i class="fa-solid fa-rotate-right"></i> Reintentar conexión
+        </button>
+      </div>
+
+      <!-- Key Input Section -->
+      <div id="keyInputSection" class="flex flex-col gap-3">
+        <p class="text-xs text-spotify-muted mb-2">
+          Ingresá tu código de invitación para desbloquear <strong>Spotify2Muzpa Studio</strong>. Este código te habilita para probar las funciones de búsqueda, sincronización y descarga.
+        </p>
+        <div>
+          <label for="activationKeyInput" class="block text-xs font-semibold text-neutral-300 mb-1">Código de Invitación / Beta Key</label>
+          <div class="relative">
+            <input type="text" id="activationKeyInput" placeholder="BETA-XXXX-XXXX" class="w-full bg-spotify-light border border-spotify-border rounded-xl px-3.5 py-2.5 text-xs text-white uppercase tracking-wider font-mono placeholder-neutral-500 focus:border-spotify transition">
+            <div class="absolute right-3 top-2.5 text-spotify-muted">
+              <i class="fa-solid fa-key text-xs"></i>
+            </div>
+          </div>
+        </div>
+
+        <div id="activationModalMsg" role="alert" class="hidden text-xs py-2 px-3 rounded-lg font-mono"></div>
+
+        <div class="flex gap-2 justify-end mt-4 pt-3 border-t border-spotify-border">
+          <button id="deactivateBtn" onclick="deactivateCurrentKey()" class="hidden bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-semibold px-4 py-2 rounded-xl transition">
+            Desactivar Clave
+          </button>
+          <button id="submitKeyBtn" onclick="submitActivationKey()" class="bg-spotify hover:bg-spotify-hover text-black text-xs font-bold px-5 py-2.5 rounded-xl transition shadow-lg shadow-spotify/20 flex items-center gap-2">
+            <span>Activar Acceso</span>
+            <i class="fa-solid fa-arrow-right text-xs"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let activeJob = null;
     let ws = null;
@@ -589,6 +648,7 @@
     // Initialize on DOM load
     document.addEventListener("DOMContentLoaded", () => {
       initWebSocket();
+      fetchAccessStatus();
       fetchState();
       checkMuzpaCredentials();
       setupKeyboardShortcuts();
@@ -619,9 +679,19 @@
         });
       }
 
+      // Enter on Activation Key Input
+      const actKeyInput = document.getElementById("activationKeyInput");
+      if (actKeyInput) {
+        actKeyInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") submitActivationKey();
+        });
+      }
+
       // Global Keyboard Shortcuts
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
+          const actM = document.getElementById("activationModal");
+          if (actM && !actM.classList.contains("hidden")) closeActivationModal();
           const m1 = document.getElementById("muzpaModal");
           if (m1 && !m1.classList.contains("hidden")) closeMuzpaModal();
           const m2 = document.getElementById("spotifyExportModal");
@@ -643,6 +713,162 @@
           }
         }
       });
+    }
+
+    // Access Control & Remote Kill-Switch Logic
+    let currentAccessStatus = null;
+
+    async function fetchAccessStatus(forceRefresh = false) {
+      try {
+        const res = await fetch(`/api/access/status${forceRefresh ? '?refresh=true' : ''}`);
+        const data = await res.json();
+        handleAccessStatus(data);
+      } catch (e) {
+        console.error("Error fetching access status:", e);
+      }
+    }
+
+    function handleAccessStatus(access) {
+      currentAccessStatus = access;
+      const modal = document.getElementById("activationModal");
+      const badge = document.getElementById("licenseBadge");
+      const badgeText = document.getElementById("licenseBadgeText");
+      const closeBtn = document.getElementById("closeActivationBtn");
+      const deactivateBtn = document.getElementById("deactivateBtn");
+
+      if (!access) return;
+
+      // Update header badge
+      if (badge) {
+        badge.classList.remove("hidden");
+        if (access.is_authorized) {
+          badge.className = "text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 cursor-pointer hover:bg-emerald-500/20 transition flex items-center gap-1";
+          badgeText.innerText = access.activated_key ? access.activated_key : "Beta Activa";
+        } else if (!access.app_enabled) {
+          badge.className = "text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border border-amber-500/40 bg-amber-500/10 text-amber-400 cursor-pointer hover:bg-amber-500/20 transition flex items-center gap-1";
+          badgeText.innerText = "Pausada";
+        } else {
+          badge.className = "text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border border-rose-500/40 bg-rose-500/10 text-rose-400 cursor-pointer hover:bg-rose-500/20 transition flex items-center gap-1";
+          badgeText.innerText = "Bloqueada";
+        }
+      }
+
+      // Handle modal display
+      if (!access.is_authorized) {
+        modal.classList.remove("hidden");
+        closeBtn.classList.add("hidden"); // Cannot dismiss if unauthorized
+
+        const killBanner = document.getElementById("killSwitchBanner");
+        const keySection = document.getElementById("keyInputSection");
+        const killMsg = document.getElementById("killSwitchMessage");
+
+        if (!access.app_enabled) {
+          // Kill-switch activated
+          killBanner.classList.remove("hidden");
+          keySection.classList.add("hidden");
+          killMsg.innerText = access.message || "La plataforma se encuentra temporalmente en pausa por mantenimiento.";
+          document.getElementById("activationModalHeading").innerText = "Plataforma en Mantenimiento";
+          document.getElementById("activationModalIcon").className = "fa-solid fa-triangle-exclamation text-amber-400";
+        } else {
+          // Activation required or invalid key
+          killBanner.classList.add("hidden");
+          keySection.classList.remove("hidden");
+          document.getElementById("activationModalHeading").innerText = "Activación de Acceso";
+          document.getElementById("activationModalIcon").className = "fa-solid fa-shield-halved text-spotify";
+          const msgEl = document.getElementById("activationModalMsg");
+          if (access.status === "INVALID_KEY" || access.status === "UPDATE_REQUIRED") {
+            msgEl.className = "text-xs py-2 px-3 rounded-lg font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30";
+            msgEl.innerText = access.message;
+            msgEl.classList.remove("hidden");
+          } else {
+            msgEl.classList.add("hidden");
+          }
+        }
+      } else {
+        // Authorized
+        modal.classList.add("hidden");
+        closeBtn.classList.remove("hidden");
+        if (deactivateBtn) deactivateBtn.classList.remove("hidden");
+      }
+    }
+
+    function openActivationModal(userInitiated = false) {
+      const modal = document.getElementById("activationModal");
+      modal.classList.remove("hidden");
+      const closeBtn = document.getElementById("closeActivationBtn");
+      const deactivateBtn = document.getElementById("deactivateBtn");
+
+      if (currentAccessStatus && currentAccessStatus.is_authorized) {
+        closeBtn.classList.remove("hidden");
+        if (deactivateBtn) deactivateBtn.classList.remove("hidden");
+        document.getElementById("activationKeyInput").value = currentAccessStatus.activated_key || "";
+      } else {
+        closeBtn.classList.add("hidden");
+        if (deactivateBtn) deactivateBtn.classList.add("hidden");
+      }
+    }
+
+    function closeActivationModal() {
+      if (currentAccessStatus && currentAccessStatus.is_authorized) {
+        document.getElementById("activationModal").classList.add("hidden");
+      }
+    }
+
+    async function submitActivationKey() {
+      const input = document.getElementById("activationKeyInput");
+      const key = input.value.trim().toUpperCase();
+      const btn = document.getElementById("submitKeyBtn");
+      const msgEl = document.getElementById("activationModalMsg");
+
+      if (!key) {
+        msgEl.className = "text-xs py-2 px-3 rounded-lg font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30";
+        msgEl.innerText = "Por favor ingresa un código de invitación.";
+        msgEl.classList.remove("hidden");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Validando...';
+      msgEl.classList.add("hidden");
+
+      try {
+        const res = await fetch("/api/access/activate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          msgEl.className = "text-xs py-2 px-3 rounded-lg font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+          msgEl.innerText = data.message || "¡Acceso activado!";
+          msgEl.classList.remove("hidden");
+          setTimeout(() => {
+            handleAccessStatus(data.access);
+          }, 700);
+        } else {
+          msgEl.className = "text-xs py-2 px-3 rounded-lg font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30";
+          msgEl.innerText = data.detail || "Código inválido.";
+          msgEl.classList.remove("hidden");
+        }
+      } catch (err) {
+        msgEl.className = "text-xs py-2 px-3 rounded-lg font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30";
+        msgEl.innerText = "Error de red al verificar la clave.";
+        msgEl.classList.remove("hidden");
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>Activar Acceso</span> <i class="fa-solid fa-arrow-right text-xs"></i>';
+      }
+    }
+
+    async function deactivateCurrentKey() {
+      if (!confirm("¿Deseas desvincular el código de activación en esta computadora?")) return;
+      try {
+        const res = await fetch("/api/access/deactivate", { method: "POST" });
+        const data = await res.json();
+        handleAccessStatus(data.access);
+      } catch (e) {
+        console.error("Error deactivating key:", e);
+      }
     }
 
     // Muzpa Credentials Modal & Auto-fill Handlers
@@ -791,6 +1017,10 @@
     }
 
     function handleWebSocketMessage(msg) {
+      if (msg.type === "access_status" || msg.type === "access_updated") {
+        if (msg.data) handleAccessStatus(msg.data);
+        return;
+      }
       if (msg.type === "state_updated" || msg.type === "state_update" || msg.type === "initial_state" || msg.type === "init_state" || msg.type === "job_finished") {
         const jobData = msg.data.job || msg.data;
         if (jobData && jobData.tracks) {
