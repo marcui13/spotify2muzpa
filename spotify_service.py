@@ -64,21 +64,34 @@ class SpotifyService:
             self._oauth_manager = None
 
     @staticmethod
-    def extract_playlist_id(url_or_uri: str) -> str:
-        """Extracts playlist ID from Spotify URL or URI."""
+    def parse_spotify_entity(url_or_uri: str) -> Tuple[str, str]:
+        """
+        Parses Spotify URL or URI and returns (entity_type, entity_id).
+        Supported types: 'playlist', 'album', 'track'.
+        """
         url_or_uri = url_or_uri.strip()
-        
-        if url_or_uri.startswith("spotify:playlist:"):
-            return url_or_uri.split(":")[-1]
 
-        match = re.search(r"playlist/([a-zA-Z0-9]+)", url_or_uri)
-        if match:
-            return match.group(1)
+        # Handle URI format: spotify:playlist:XXXX, spotify:album:XXXX, spotify:track:XXXX
+        uri_match = re.match(r"^spotify:(playlist|album|track):([a-zA-Z0-9]+)", url_or_uri)
+        if uri_match:
+            return uri_match.group(1), uri_match.group(2)
 
+        # Handle URL format: open.spotify.com/playlist/XXXX, /album/XXXX, /track/XXXX
+        url_match = re.search(r"(playlist|album|track)/([a-zA-Z0-9]+)", url_or_uri)
+        if url_match:
+            return url_match.group(1), url_match.group(2)
+
+        # Raw 22-char ID defaults to playlist
         if re.match(r"^[a-zA-Z0-9]{22}$", url_or_uri):
-            return url_or_uri
+            return "playlist", url_or_uri
 
-        raise ValueError(f"Could not parse valid Spotify playlist ID from '{url_or_uri}'")
+        raise ValueError(f"Could not parse valid Spotify playlist, album, or track from '{url_or_uri}'")
+
+    @staticmethod
+    def extract_playlist_id(url_or_uri: str) -> str:
+        """Extracts playlist, album, or track ID from Spotify URL or URI."""
+        _, entity_id = SpotifyService.parse_spotify_entity(url_or_uri)
+        return entity_id
 
     @staticmethod
     def format_duration(duration_ms: int) -> str:
@@ -88,13 +101,13 @@ class SpotifyService:
         seconds = total_seconds % 60
         return f"{minutes:02d}:{seconds:02d}"
 
-    def fetch_playlist_via_embed(self, playlist_id: str) -> Tuple[str, Optional[str], List[SpotifyTrack]]:
+    def fetch_playlist_via_embed(self, playlist_id: str, entity_type: str = "playlist") -> Tuple[str, Optional[str], List[SpotifyTrack]]:
         """
-        Extracts playlist metadata and tracks from Spotify Embed page.
+        Extracts playlist, album, or track metadata and tracks from Spotify Embed page.
         Guarantees 100% reliability even without API tokens or with API policy restrictions.
         """
-        logger.info(f"Extracting playlist via Spotify Embed parser for ID: {playlist_id}")
-        embed_url = f"https://open.spotify.com/embed/playlist/{playlist_id}"
+        logger.info(f"Extracting {entity_type} via Spotify Embed parser for ID: {playlist_id}")
+        embed_url = f"https://open.spotify.com/embed/{entity_type}/{playlist_id}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
@@ -107,98 +120,167 @@ class SpotifyService:
         # Parse __NEXT_DATA__
         match = re.search(r'<script id="__NEXT_DATA__" type="application/json">([^<]+)</script>', resp.text)
         if not match:
-            raise RuntimeError("Could not find __NEXT_DATA__ in Spotify embed page.")
+            raise RuntimeError(f"Could not find __NEXT_DATA__ in Spotify {entity_type} embed page.")
 
         data = json.loads(match.group(1))
         entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
 
-        playlist_name = entity.get("name", f"Playlist_{playlist_id}")
+        entity_name = entity.get("name", f"{entity_type.capitalize()}_{playlist_id}")
         cover_art = entity.get("coverArt", {}).get("sources", [])
-        playlist_image = cover_art[0].get("url") if cover_art else None
+        entity_image = cover_art[0].get("url") if cover_art else None
 
         raw_tracks = entity.get("trackList", [])
         tracks: List[SpotifyTrack] = []
 
-        for idx, item in enumerate(raw_tracks):
-            track_title = item.get("title", f"Track {idx+1}")
-            artist_str = item.get("subtitle", "Unknown Artist")
-            # Replace non-breaking spaces
-            artist_str = artist_str.replace("\xa0", " ").strip()
-            
-            duration_ms = item.get("duration", 0)
-            duration_str = self.format_duration(duration_ms)
+        if raw_tracks:
+            for idx, item in enumerate(raw_tracks):
+                track_title = item.get("title", f"Track {idx+1}")
+                artist_str = item.get("subtitle", "Unknown Artist")
+                artist_str = artist_str.replace("\xa0", " ").strip()
+                
+                duration_ms = item.get("duration", 0)
+                duration_str = self.format_duration(duration_ms)
 
-            # Spotify track URI e.g. "spotify:track:XXXX"
-            track_uri = item.get("uri", "")
-            track_id = track_uri.split(":")[-1] if ":" in track_uri else f"track_{idx}_{playlist_id}"
-            spotify_url = f"https://open.spotify.com/track/{track_id}" if track_id else ""
+                track_uri = item.get("uri", "")
+                track_id = track_uri.split(":")[-1] if ":" in track_uri else f"track_{idx}_{playlist_id}"
+                spotify_url = f"https://open.spotify.com/track/{track_id}" if track_id else ""
 
-            # Check for album/track image
-            track_obj = SpotifyTrack(
-                id=track_id,
+                track_obj = SpotifyTrack(
+                    id=track_id,
+                    title=track_title,
+                    artist=artist_str,
+                    album=entity_name,
+                    duration_ms=duration_ms,
+                    duration_str=duration_str,
+                    spotify_url=spotify_url,
+                    image_url=entity_image,
+                    preview_url=item.get("audioPreview", {}).get("url") if isinstance(item.get("audioPreview"), dict) else None
+                )
+                tracks.append(track_obj)
+        elif entity_type == "track":
+            track_title = entity.get("name", f"Track_{playlist_id}")
+            artist_str = entity.get("artists", [{}])[0].get("name", "Unknown Artist") if entity.get("artists") else "Unknown Artist"
+            duration_ms = entity.get("duration", 0)
+            spotify_url = f"https://open.spotify.com/track/{playlist_id}"
+            tracks.append(SpotifyTrack(
+                id=playlist_id,
                 title=track_title,
                 artist=artist_str,
-                album=playlist_name,
+                album=entity_name,
                 duration_ms=duration_ms,
-                duration_str=duration_str,
+                duration_str=self.format_duration(duration_ms),
                 spotify_url=spotify_url,
-                image_url=playlist_image,
-                preview_url=item.get("audioPreview", {}).get("url") if isinstance(item.get("audioPreview"), dict) else None
-            )
-            tracks.append(track_obj)
+                image_url=entity_image,
+                preview_url=entity.get("audioPreview", {}).get("url") if isinstance(entity.get("audioPreview"), dict) else None
+            ))
 
         self.enrich_tracks_with_audio_features(tracks)
-        logger.info(f"Embed parser successfully loaded '{playlist_name}' with {len(tracks)} tracks.")
-        return playlist_name, playlist_image, tracks
+        logger.info(f"Embed parser successfully loaded '{entity_name}' ({entity_type}) with {len(tracks)} tracks.")
+        return entity_name, entity_image, tracks
 
     def fetch_playlist(self, playlist_url_or_id: str) -> Tuple[str, Optional[str], List[SpotifyTrack]]:
         """
-        Fetches playlist details and tracks with auto fallback.
+        Fetches playlist, album, or track details and tracks with auto fallback.
         """
-        playlist_id = self.extract_playlist_id(playlist_url_or_id)
+        entity_type, entity_id = self.parse_spotify_entity(playlist_url_or_id)
 
         # 1. Try official Spotipy API if initialized
         if self._sp:
             try:
-                logger.info(f"Attempting official Spotify API for ID: {playlist_id}")
-                playlist_meta = self._sp.playlist(playlist_id)
-                playlist_name = playlist_meta.get("name", f"Playlist_{playlist_id}")
-                images = playlist_meta.get("images", [])
-                playlist_image = images[0].get("url") if images else None
-
-                tracks_data = playlist_meta.get("tracks", {}).get("items", [])
-                if tracks_data:
+                if entity_type == "album":
+                    logger.info(f"Attempting official Spotify API for Album ID: {entity_id}")
+                    album_meta = self._sp.album(entity_id)
+                    album_name = album_meta.get("name", f"Album_{entity_id}")
+                    images = album_meta.get("images", [])
+                    album_image = images[0].get("url") if images else None
+                    tracks_data = album_meta.get("tracks", {}).get("items", [])
                     tracks: List[SpotifyTrack] = []
-                    for item in tracks_data:
-                        t = item.get("track")
+                    for t in tracks_data:
                         if not t or not t.get("id"):
                             continue
                         artists = [a.get("name", "") for a in t.get("artists", []) if a.get("name")]
                         artist_str = ", ".join(artists) if artists else "Unknown Artist"
                         dur_ms = t.get("duration_ms", 0)
-                        album_data = t.get("album", {})
-                        album_images = album_data.get("images", [])
-                        
                         tracks.append(SpotifyTrack(
                             id=t["id"],
                             title=t.get("name", "Unknown Title"),
                             artist=artist_str,
-                            album=album_data.get("name", playlist_name),
+                            album=album_name,
                             duration_ms=dur_ms,
                             duration_str=self.format_duration(dur_ms),
                             spotify_url=t.get("external_urls", {}).get("spotify", ""),
-                            image_url=album_images[0].get("url") if album_images else playlist_image,
+                            image_url=album_image,
                             preview_url=t.get("preview_url")
                         ))
                     if tracks:
                         self.enrich_tracks_with_audio_features(tracks)
-                        logger.info(f"API loaded '{playlist_name}' with {len(tracks)} tracks (with BPM & Harmonic Key data).")
-                        return playlist_name, playlist_image, tracks
+                        logger.info(f"API loaded album '{album_name}' with {len(tracks)} tracks.")
+                        return album_name, album_image, tracks
+
+                elif entity_type == "track":
+                    logger.info(f"Attempting official Spotify API for Track ID: {entity_id}")
+                    track_meta = self._sp.track(entity_id)
+                    track_name = track_meta.get("name", f"Track_{entity_id}")
+                    artists = [a.get("name", "") for a in track_meta.get("artists", []) if a.get("name")]
+                    artist_str = ", ".join(artists) if artists else "Unknown Artist"
+                    dur_ms = track_meta.get("duration_ms", 0)
+                    album_data = track_meta.get("album", {})
+                    images = album_data.get("images", [])
+                    track_image = images[0].get("url") if images else None
+                    tracks = [SpotifyTrack(
+                        id=track_meta["id"],
+                        title=track_name,
+                        artist=artist_str,
+                        album=album_data.get("name", track_name),
+                        duration_ms=dur_ms,
+                        duration_str=self.format_duration(dur_ms),
+                        spotify_url=track_meta.get("external_urls", {}).get("spotify", ""),
+                        image_url=track_image,
+                        preview_url=track_meta.get("preview_url")
+                    )]
+                    self.enrich_tracks_with_audio_features(tracks)
+                    return track_name, track_image, tracks
+
+                else: # Default playlist
+                    logger.info(f"Attempting official Spotify API for Playlist ID: {entity_id}")
+                    playlist_meta = self._sp.playlist(entity_id)
+                    playlist_name = playlist_meta.get("name", f"Playlist_{entity_id}")
+                    images = playlist_meta.get("images", [])
+                    playlist_image = images[0].get("url") if images else None
+
+                    tracks_data = playlist_meta.get("tracks", {}).get("items", [])
+                    if tracks_data:
+                        tracks: List[SpotifyTrack] = []
+                        for item in tracks_data:
+                            t = item.get("track")
+                            if not t or not t.get("id"):
+                                continue
+                            artists = [a.get("name", "") for a in t.get("artists", []) if a.get("name")]
+                            artist_str = ", ".join(artists) if artists else "Unknown Artist"
+                            dur_ms = t.get("duration_ms", 0)
+                            album_data = t.get("album", {})
+                            album_images = album_data.get("images", [])
+                            
+                            tracks.append(SpotifyTrack(
+                                id=t["id"],
+                                title=t.get("name", "Unknown Title"),
+                                artist=artist_str,
+                                album=album_data.get("name", playlist_name),
+                                duration_ms=dur_ms,
+                                duration_str=self.format_duration(dur_ms),
+                                spotify_url=t.get("external_urls", {}).get("spotify", ""),
+                                image_url=album_images[0].get("url") if album_images else playlist_image,
+                                preview_url=t.get("preview_url")
+                            ))
+                        if tracks:
+                            self.enrich_tracks_with_audio_features(tracks)
+                            logger.info(f"API loaded '{playlist_name}' with {len(tracks)} tracks (with BPM & Harmonic Key data).")
+                            return playlist_name, playlist_image, tracks
             except Exception as e:
                 logger.info(f"Official API request fell back to embed parser: {e}")
 
         # 2. Resilient Embed parser
-        return self.fetch_playlist_via_embed(playlist_id)
+        return self.fetch_playlist_via_embed(entity_id, entity_type=entity_type)
 
     def enrich_tracks_with_audio_features(self, tracks: List[SpotifyTrack]) -> None:
         """Fetches BPM, Musical Key, and Camelot signature for tracks via Spotify Audio Features + Multi-source Fallback."""

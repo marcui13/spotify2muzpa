@@ -148,16 +148,16 @@
       <div id="srcSpotifyGroup" class="flex flex-col md:flex-row gap-4 items-center justify-between relative z-10">
         <div class="w-full flex-1">
           <label id="playlistLoaderTitle" for="playlistInput" class="block text-xs font-bold text-spotify-muted mb-1.5 uppercase tracking-wider">
-            Spotify Playlist URL or URI
+            Spotify Playlist, Album, or Track URL / URI
           </label>
           <div class="flex gap-2">
             <div class="relative flex-1">
               <i class="fa-brands fa-spotify absolute left-3.5 top-1/2 -translate-y-1/2 text-spotify-muted text-base" aria-hidden="true"></i>
-              <input type="text" id="playlistInput" placeholder="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M..." 
+              <input type="text" id="playlistInput" placeholder="https://open.spotify.com/playlist/... or /album/... or /track/..." 
                 class="w-full bg-spotify-light border border-spotify-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:border-spotify transition shadow-inner">
             </div>
             <button onclick="loadPlaylist(false)" id="loadBtn" class="bg-spotify hover:bg-spotify-hover text-black font-bold px-5 md:px-6 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow-lg shadow-spotify/20 shrink-0">
-              <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i> <span>Load Playlist</span>
+              <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i> <span>Load Tracks</span>
             </button>
             <button onclick="loadPlaylist(true)" id="reloadFreshBtn" title="Fetch fresh playlist from Spotify API & reset all saved progress" class="bg-spotify-light hover:bg-spotify-card-hover text-cyan-300 border border-spotify-border font-bold px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow shrink-0">
               <i class="fa-solid fa-arrows-rotate text-cyan-400" aria-hidden="true"></i> <span class="hidden sm:inline">Reload Fresh</span>

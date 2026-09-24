@@ -18,6 +18,34 @@ def test_extract_playlist_id_raw():
     assert SpotifyService.extract_playlist_id(raw_id) == "37i9dQZF1DXcBWIGoYBM5M"
 
 
+def test_parse_spotify_entity_variations():
+    # Playlist
+    assert SpotifyService.parse_spotify_entity("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=123") == ("playlist", "37i9dQZF1DXcBWIGoYBM5M")
+    assert SpotifyService.parse_spotify_entity("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M") == ("playlist", "37i9dQZF1DXcBWIGoYBM5M")
+
+    # Album
+    assert SpotifyService.parse_spotify_entity("https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa?si=test") == ("album", "4m2880jivSbbyEGAKfITCa")
+    assert SpotifyService.parse_spotify_entity("spotify:album:4m2880jivSbbyEGAKfITCa") == ("album", "4m2880jivSbbyEGAKfITCa")
+
+    # Track
+    assert SpotifyService.parse_spotify_entity("https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6?si=abc") == ("track", "6rqhFgbbKwnb9MLmUQDhG6")
+    assert SpotifyService.parse_spotify_entity("spotify:track:6rqhFgbbKwnb9MLmUQDhG6") == ("track", "6rqhFgbbKwnb9MLmUQDhG6")
+
+    # Raw ID
+    assert SpotifyService.parse_spotify_entity("4m2880jivSbbyEGAKfITCa") == ("playlist", "4m2880jivSbbyEGAKfITCa")
+
+    # Invalid
+    with pytest.raises(ValueError):
+        SpotifyService.parse_spotify_entity("https://unknown.com/music/123")
+
+
+def test_extract_playlist_id_album_and_track():
+    assert SpotifyService.extract_playlist_id("https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa") == "4m2880jivSbbyEGAKfITCa"
+    assert SpotifyService.extract_playlist_id("https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6") == "6rqhFgbbKwnb9MLmUQDhG6"
+    assert SpotifyService.extract_playlist_id("spotify:album:4m2880jivSbbyEGAKfITCa") == "4m2880jivSbbyEGAKfITCa"
+
+
+
 def test_format_duration():
     assert SpotifyService.format_duration(215000) == "03:35"
     assert SpotifyService.format_duration(60000) == "01:00"
@@ -78,4 +106,63 @@ def test_spotify_create_user_playlist():
         assert res["playlist_uri"] == "spotify:playlist:pl_123"
         assert res["tracks_added"] == 2
         mock_sp.playlist_add_items.assert_called_once_with("pl_123", ["spotify:track:abc", "spotify:track:def"])
+
+
+def test_fetch_album_official_api():
+    from unittest.mock import MagicMock, patch
+    service = SpotifyService(client_id="dummy", client_secret="dummy")
+    service._sp = MagicMock()
+    service._sp.album.return_value = {
+        "name": "Discovery",
+        "images": [{"url": "https://img.spotify.com/album123.jpg"}],
+        "tracks": {
+            "items": [
+                {
+                    "id": "t1",
+                    "name": "One More Time",
+                    "artists": [{"name": "Daft Punk"}],
+                    "duration_ms": 320000,
+                    "external_urls": {"spotify": "https://open.spotify.com/track/t1"},
+                    "preview_url": None
+                }
+            ]
+        }
+    }
+
+    with patch.object(service, "enrich_tracks_with_audio_features"):
+        name, img, tracks = service.fetch_playlist("https://open.spotify.com/album/album_123")
+        assert name == "Discovery"
+        assert img == "https://img.spotify.com/album123.jpg"
+        assert len(tracks) == 1
+        assert tracks[0].title == "One More Time"
+        assert tracks[0].artist == "Daft Punk"
+        assert tracks[0].album == "Discovery"
+
+
+def test_fetch_track_official_api():
+    from unittest.mock import MagicMock, patch
+    service = SpotifyService(client_id="dummy", client_secret="dummy")
+    service._sp = MagicMock()
+    service._sp.track.return_value = {
+        "id": "track_123",
+        "name": "Harder, Better, Faster, Stronger",
+        "artists": [{"name": "Daft Punk"}],
+        "duration_ms": 224000,
+        "album": {
+            "name": "Discovery",
+            "images": [{"url": "https://img.spotify.com/album123.jpg"}]
+        },
+        "external_urls": {"spotify": "https://open.spotify.com/track/track_123"},
+        "preview_url": None
+    }
+
+    with patch.object(service, "enrich_tracks_with_audio_features"):
+        name, img, tracks = service.fetch_playlist("https://open.spotify.com/track/track_123")
+        assert name == "Harder, Better, Faster, Stronger"
+        assert img == "https://img.spotify.com/album123.jpg"
+        assert len(tracks) == 1
+        assert tracks[0].title == "Harder, Better, Faster, Stronger"
+        assert tracks[0].artist == "Daft Punk"
+        assert tracks[0].album == "Discovery"
+
 
