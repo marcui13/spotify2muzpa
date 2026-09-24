@@ -21,43 +21,87 @@ logger = logging.getLogger("muzpa_crawler")
 
 
 def detect_available_browsers() -> Dict[str, Dict[str, Any]]:
-    """Detects available web browsers installed on the host system."""
+    """Detects available web browsers installed on the host system (macOS, Windows, Linux)."""
+    import platform
     detected = {}
+    os_name = platform.system().lower()
+
+    chrome_path: Optional[Path] = None
+    brave_path: Optional[Path] = None
+    edge_path: Optional[Path] = None
+
+    if os_name == "darwin":
+        p = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        if p.exists():
+            chrome_path = p
+        p = Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")
+        if p.exists():
+            brave_path = p
+        p = Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+        if p.exists():
+            edge_path = p
+    elif os_name == "windows":
+        prog_files = Path(os.environ.get("ProgramFiles", "C:\\Program Files"))
+        prog_files_x86 = Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"))
+        local_app = Path(os.environ.get("LOCALAPPDATA", "C:\\Users\\Default\\AppData\\Local"))
+
+        for candidate in [
+            prog_files / "Google" / "Chrome" / "Application" / "chrome.exe",
+            prog_files_x86 / "Google" / "Chrome" / "Application" / "chrome.exe",
+            local_app / "Google" / "Chrome" / "Application" / "chrome.exe",
+        ]:
+            if candidate.exists():
+                chrome_path = candidate
+                break
+
+        for candidate in [
+            prog_files / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+            prog_files_x86 / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+            local_app / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+        ]:
+            if candidate.exists():
+                brave_path = candidate
+                break
+
+        for candidate in [
+            prog_files_x86 / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            prog_files / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+        ]:
+            if candidate.exists():
+                edge_path = candidate
+                break
 
     # 1. Google Chrome
-    chrome_mac = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-    if chrome_mac.exists():
+    if chrome_path:
         detected["chrome"] = {
             "name": "Google Chrome",
             "channel": "chrome",
-            "executable_path": str(chrome_mac),
+            "executable_path": str(chrome_path),
             "installed": True,
             "recommended": True
         }
 
     # 2. Brave Browser
-    brave_mac = Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")
-    if brave_mac.exists():
+    if brave_path:
         detected["brave"] = {
             "name": "Brave Browser",
             "channel": None,
-            "executable_path": str(brave_mac),
+            "executable_path": str(brave_path),
             "installed": True,
             "recommended": False
         }
 
     # 3. Microsoft Edge
-    edge_mac = Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
-    if edge_mac.exists():
+    if edge_path:
         detected["edge"] = {
             "name": "Microsoft Edge",
             "channel": "msedge",
-            "executable_path": str(edge_mac),
+            "executable_path": str(edge_path),
             "installed": True,
-            "recommended": False
+            "recommended": "chrome" not in detected
         }
 
-    # 4. Bundled Playwright Chromium (Always available)
+    # 4. Bundled Playwright Chromium (Always available as fallback)
     detected["chromium"] = {
         "name": "Playwright Chromium (Bundled)",
         "channel": None,

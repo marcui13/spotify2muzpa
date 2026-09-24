@@ -1,0 +1,122 @@
+name: Build Desktop App
+
+on:
+  workflow_dispatch: # Allows manual trigger from GitHub Actions UI (available once merged to main)
+  push:
+    branches:
+      - main
+      - 'feat/**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Quality Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pytest suite
+        run: |
+          PYTHONPATH=. pytest -v tests
+
+  build-windows:
+    name: Build Windows (.exe)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          playwright install chromium
+
+      - name: Run Build Script (PyInstaller + ZIP packaging)
+        run: |
+          python build_desktop.py
+
+      - name: Upload Windows Distribution Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spotify2MuzpaStudio-Windows
+          path: dist/Spotify2MuzpaStudio-Windows.zip
+          retention-days: 14
+
+  build-macos:
+    name: Build macOS (.dmg)
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          playwright install chromium
+
+      - name: Run Build Script (PyInstaller + DMG packaging)
+        run: |
+          python build_desktop.py
+
+      - name: Upload macOS Distribution Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spotify2MuzpaStudio-macOS
+          path: dist/Spotify2MuzpaStudio-macOS.dmg
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/Spotify2MuzpaStudio-Windows/Spotify2MuzpaStudio-Windows.zip
+            release-artifacts/Spotify2MuzpaStudio-macOS/Spotify2MuzpaStudio-macOS.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: false

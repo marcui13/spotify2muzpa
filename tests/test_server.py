@@ -49,10 +49,16 @@ def test_muzpa_credentials_flow(client):
 
 
 def test_track_decision_endpoints(client):
-    # Test confirm endpoint
+    # Test confirm endpoint with candidate_id
     conf_res = client.post("/api/track/confirm", json={"track_id": "test_track_1", "candidate_id": "cand_1"})
     assert conf_res.status_code == 200
     assert conf_res.json()["status"] == "confirmed"
+
+    # Test confirm endpoint without candidate_id (defaults to top candidate)
+    conf_res_top = client.post("/api/track/confirm", json={"track_id": "test_track_1"})
+    assert conf_res_top.status_code == 200
+    assert conf_res_top.json()["status"] == "confirmed"
+    assert conf_res_top.json()["candidate_id"] is None
 
     # Test skip endpoint
     skip_res = client.post("/api/track/skip", json={"track_id": "test_track_1"})

@@ -417,19 +417,22 @@
           </div>
 
           <!-- Search Query Bar -->
-          <div class="flex gap-2 items-center">
-            <div class="relative flex-1">
+          <div class="flex flex-wrap gap-2 items-center">
+            <div class="relative flex-1 min-w-[200px]">
               <input type="text" id="searchQueryInput" placeholder="Muzpa search query (Artist - Title)..." 
                 class="w-full bg-spotify-light border border-spotify-border rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:border-spotify transition shadow-inner">
             </div>
             <button onclick="reSearchCurrentTrack()" aria-label="Re-search current track" class="bg-neutral-800 hover:bg-spotify-card-hover text-neutral-200 border border-spotify-border text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
               <i class="fa-solid fa-magnifying-glass text-spotify" aria-hidden="true"></i> <span>Re-search</span>
             </button>
-            <button onclick="resetCurrentTrack()" title="Reset this track state and re-search" class="bg-neutral-800 hover:bg-spotify-card-hover text-neutral-300 border border-spotify-border text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
-              <i class="fa-solid fa-rotate-left text-cyan-400" aria-hidden="true"></i> <span>Reset</span>
+            <button id="confirmTrackBtn" onclick="confirmCurrentTrack()" aria-label="Confirm track match" class="bg-spotify hover:bg-spotify-hover text-black font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 transition shadow shrink-0 cursor-pointer">
+              <i class="fa-solid fa-check" aria-hidden="true"></i> <span id="confirmTrackBtnText">Confirm Match</span>
             </button>
             <button onclick="skipCurrentTrack()" aria-label="Skip current track" class="bg-neutral-800 hover:bg-rose-950 text-neutral-300 hover:text-rose-400 border border-spotify-border text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
               <i class="fa-solid fa-forward" aria-hidden="true"></i> <span>Skip</span>
+            </button>
+            <button onclick="resetCurrentTrack()" title="Reset this track state and re-search" class="bg-neutral-800 hover:bg-spotify-card-hover text-neutral-300 border border-spotify-border text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 font-semibold transition shrink-0">
+              <i class="fa-solid fa-rotate-left text-cyan-400" aria-hidden="true"></i> <span>Reset</span>
             </button>
           </div>
 
@@ -437,7 +440,7 @@
           <div class="flex flex-col gap-2">
             <div class="flex items-center justify-between text-xs font-semibold text-neutral-300">
               <span>Muzpa Matches Found (<span id="candidateCount" class="font-mono text-spotify">0</span>)</span>
-              <span class="text-[11px] text-spotify-muted">Click any match to download & advance</span>
+              <span class="text-[11px] text-spotify-muted">Click match or 'Confirm' to download & advance</span>
             </div>
 
             <div id="candidatesList" role="region" aria-live="polite" class="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
@@ -616,7 +619,7 @@
         });
       }
 
-      // Escape to close modals
+      // Global Keyboard Shortcuts
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
           const m1 = document.getElementById("muzpaModal");
@@ -625,6 +628,19 @@
           if (m2 && !m2.classList.contains("hidden")) closeSpotifyExportModal();
           const m3 = document.getElementById("youtubeExportModal");
           if (m3 && !m3.classList.contains("hidden")) closeYouTubeExportModal();
+          return;
+        }
+
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.isContentEditable);
+        if (isTyping) return;
+
+        // Enter confirms active track
+        if (e.key === "Enter") {
+          const confirmBtn = document.getElementById("confirmTrackBtn");
+          if (confirmBtn && !confirmBtn.disabled) {
+            confirmCurrentTrack();
+          }
         }
       });
     }
@@ -1680,6 +1696,25 @@
       }
     }
 
+    let selectedCandidateId = null;
+
+    function selectCandidate(candId) {
+      selectedCandidateId = candId;
+      if (activeJob && activeJob.tracks && activeJob.current_track_index < activeJob.tracks.length) {
+        renderActiveTrack(activeJob.tracks[activeJob.current_track_index]);
+      }
+    }
+
+    async function confirmCurrentTrack() {
+      if (!currentTrackId) return;
+      await confirmCandidate(selectedCandidateId);
+    }
+
+    async function quickConfirmTrack(trackId, candId) {
+      currentTrackId = trackId;
+      await confirmCandidate(candId);
+    }
+
     async function confirmCandidate(candidateId) {
       if (!currentTrackId) return;
       triggerDecisionLoader();
@@ -1690,6 +1725,12 @@
         list.innerHTML = `<div class="text-xs text-spotify text-center py-8 border border-dashed border-spotify/30 rounded-xl font-mono flex items-center justify-center gap-2 animate-pulse">
           <i class="fa-solid fa-cloud-arrow-down fa-bounce"></i> Enqueued! Advancing to search next track...
         </div>`;
+      }
+
+      const confirmBtn = document.getElementById("confirmTrackBtn");
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.className = "bg-neutral-800 text-neutral-500 font-semibold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-not-allowed opacity-50 shrink-0";
       }
 
       await fetch("/api/track/confirm", {
@@ -2032,6 +2073,11 @@
             ${tr.camelot_key ? `<span class="text-[9px] font-mono font-bold text-amber-300 bg-amber-950/80 border border-amber-700/60 px-1.5 py-0.5 rounded shadow-sm" title="Key: ${tr.musical_key || tr.camelot_key}"><i class="fa-solid fa-music text-[8px] mr-0.5 text-amber-400" aria-hidden="true"></i>${tr.camelot_key}</span>` : '<span class="text-[8px] font-mono text-neutral-600 bg-neutral-900/60 border border-white/5 px-1 py-0.5 rounded" title="Key not detected">-- Key</span>'}
             <span class="text-[10px] font-mono text-neutral-500">${tr.duration_str}</span>
             <span class="text-[10px] font-mono px-2 py-0.5 rounded-full ${statusClass}">${statusIcon}${t.status}</span>
+            ${(t.status === "WAITING_CONFIRMATION" && t.candidates && t.candidates.length > 0) ? `
+            <button onclick="event.stopPropagation(); quickConfirmTrack('${tr.id}', '${t.candidates[0].id}')" title="Confirm best match (${t.candidates[0].score}%) and download" aria-label="Confirm track" class="bg-spotify hover:bg-spotify-hover text-black px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 transition shadow animate-pulse">
+              <i class="fa-solid fa-check" aria-hidden="true"></i> Confirm
+            </button>
+            ` : ''}
             <button onclick="event.stopPropagation(); openInSpotify('${tr.id}', '${escapeAttr(tr.spotify_url || '')}')" title="Open track in Spotify App (or Web)" aria-label="Open in Spotify" class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-emerald-400 p-1 rounded text-xs transition">
               <i class="fa-brands fa-spotify" aria-hidden="true"></i>
             </button>
@@ -2053,6 +2099,7 @@
     function renderActiveTrack(trackState) {
       if (!trackState) return;
       const tr = trackState.spotify_track;
+      currentTrackId = tr.id;
 
       document.getElementById("activeTitle").innerText = tr.title;
       document.getElementById("activeArtist").innerText = tr.artist;
@@ -2088,32 +2135,87 @@
 
       // Render candidates
       const list = document.getElementById("candidatesList");
-      document.getElementById("candidateCount").innerText = trackState.candidates.length;
+      const confirmBtn = document.getElementById("confirmTrackBtn");
+      const confirmBtnText = document.getElementById("confirmTrackBtnText");
+      const candCount = trackState.candidates ? trackState.candidates.length : 0;
+      document.getElementById("candidateCount").innerText = candCount;
       list.innerHTML = "";
 
-      if (trackState.candidates.length === 0) {
-        list.innerHTML = `<div class="text-xs text-neutral-500 text-center py-8 border border-dashed border-white/5 rounded-xl font-mono">
-          ${trackState.status === "SEARCHING" ? '<i class="fa-solid fa-spinner fa-spin text-spotify"></i> Searching Muzpa...' : 'No candidates available for this track.'}
-        </div>`;
+      if (candCount === 0) {
+        selectedCandidateId = null;
+        if (confirmBtn) {
+          confirmBtn.disabled = true;
+          confirmBtn.className = "bg-neutral-800 text-neutral-500 font-semibold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-not-allowed opacity-50 shrink-0";
+          if (confirmBtnText) confirmBtnText.innerText = (trackState.status === "SEARCHING") ? "Searching..." : "No Matches to Confirm";
+        }
+
+        if (trackState.status === "SEARCHING") {
+          list.innerHTML = `<div class="text-xs text-neutral-400 text-center py-8 border border-dashed border-white/5 rounded-xl font-mono flex items-center justify-center gap-2">
+            <i class="fa-solid fa-spinner fa-spin text-spotify"></i> Searching Muzpa for matching releases...
+          </div>`;
+        } else {
+          list.innerHTML = `
+            <div class="p-6 text-center border border-dashed border-amber-500/30 bg-amber-500/5 rounded-xl flex flex-col items-center gap-2 font-mono">
+              <div class="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span>No matching releases found on Muzpa</span>
+              </div>
+              <p class="text-[11px] text-neutral-400 max-w-md">
+                Refine the search query above and click <strong class="text-spotify">Re-search</strong>, or click <strong class="text-rose-400">Skip</strong> to advance to the next track.
+              </p>
+              <div class="flex items-center gap-2 mt-2">
+                <button onclick="reSearchCurrentTrack()" class="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-spotify-border rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
+                  <i class="fa-solid fa-magnifying-glass text-spotify"></i> Re-search
+                </button>
+                <button onclick="skipCurrentTrack()" class="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800/80 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
+                  <i class="fa-solid fa-forward"></i> Skip Track
+                </button>
+              </div>
+            </div>
+          `;
+        }
         return;
+      }
+
+      // If no candidate selected or candidate is not in current list, default to top candidate
+      if (!selectedCandidateId || !trackState.candidates.some(c => c.id === selectedCandidateId)) {
+        selectedCandidateId = trackState.candidates[0].id;
+      }
+
+      const selectedCand = trackState.candidates.find(c => c.id === selectedCandidateId) || trackState.candidates[0];
+
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.className = "bg-spotify hover:bg-spotify-hover text-black font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 transition shadow shrink-0 cursor-pointer animate-pulse";
+        if (confirmBtnText) {
+          confirmBtnText.innerText = selectedCand ? `Confirm Match (${selectedCand.score}%)` : "Confirm Match";
+        }
       }
 
       trackState.candidates.forEach((cand, idx) => {
         const item = document.createElement("div");
         const isTop = (idx === 0);
+        const isSelected = (cand.id === selectedCandidateId);
         let scoreColor = "bg-rose-500";
         if (cand.score >= 80) scoreColor = "bg-emerald-500";
         else if (cand.score >= 65) scoreColor = "bg-amber-500";
 
-        item.className = `p-3.5 rounded-xl border flex items-center justify-between gap-3 transition ${
-          isTop ? 'bg-spotify/10 border-spotify/40' : 'bg-spotify-light/60 border-spotify-border hover:border-white/20'
+        item.className = `p-3.5 rounded-xl border flex items-center justify-between gap-3 transition cursor-pointer ${
+          isSelected 
+            ? 'bg-spotify/15 border-spotify ring-1 ring-spotify/50 shadow-md' 
+            : (isTop ? 'bg-spotify/5 border-spotify/30 hover:border-spotify/50' : 'bg-spotify-light/60 border-spotify-border hover:border-white/20')
         }`;
+
+        item.onclick = (e) => {
+          if (e.target.closest("button")) return;
+          selectCandidate(cand.id);
+        };
 
         item.innerHTML = `
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
               <p class="text-xs font-bold text-white truncate">${escapeHtml(cand.title)}</p>
-              ${isTop ? '<span class="text-[9px] bg-spotify text-black font-bold px-1.5 py-0.2 rounded font-mono">TOP MATCH</span>' : ''}
+              ${isSelected ? '<span class="text-[9px] bg-spotify text-black font-bold px-1.5 py-0.2 rounded font-mono flex items-center gap-0.5"><i class="fa-solid fa-check text-[8px]"></i>SELECTED</span>' : (isTop ? '<span class="text-[9px] bg-neutral-700 text-neutral-200 font-bold px-1.5 py-0.2 rounded font-mono">TOP MATCH</span>' : '')}
             </div>
             <p class="text-[11px] text-spotify-muted truncate mt-0.5">${escapeHtml(cand.artist)}</p>
             <div class="flex items-center gap-3 text-[10px] text-neutral-400 mt-1 font-mono">
@@ -2132,8 +2234,8 @@
             </div>
 
             <!-- Action Button with instant feedback -->
-            <button onclick="confirmCandidate('${cand.id}')" aria-label="Download match: ${escapeHtml(cand.title)}" class="px-3 py-1.5 bg-spotify hover:bg-spotify-hover text-black font-bold text-xs rounded-lg flex items-center gap-1.5 transition shadow">
-              <i class="fa-solid fa-download" aria-hidden="true"></i> <span>Download</span>
+            <button onclick="confirmCandidate('${cand.id}')" aria-label="Confirm match: ${escapeHtml(cand.title)}" class="px-3.5 py-2 bg-spotify hover:bg-spotify-hover text-black font-bold text-xs rounded-xl flex items-center gap-1.5 transition shadow shrink-0">
+              <i class="fa-solid fa-check" aria-hidden="true"></i> <span>Confirm & Download</span>
             </button>
           </div>
         `;

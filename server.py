@@ -279,8 +279,11 @@ class DownloadOrchestrator:
                 # Immediately advance to next track!
                 return
 
-            # Otherwise, wait for user confirmation
-            track_state.status = TrackStatus.WAITING_CONFIRMATION
+            # Otherwise, wait for user confirmation or resolution
+            if candidates:
+                track_state.status = TrackStatus.WAITING_CONFIRMATION
+            else:
+                track_state.status = TrackStatus.NOT_FOUND
             StateManager.save_job(self.current_job)
             await manager.broadcast({"type": "waiting_decision", "track_id": track_id, "data": track_state.model_dump()})
 
@@ -309,11 +312,17 @@ class DownloadOrchestrator:
                 if chosen_candidate:
                     # Non-blocking enqueue!
                     self.download_queue.enqueue_download(self.current_job, track_state, chosen_candidate)
+                    return
                 else:
-                    track_state.status = TrackStatus.ERROR
-                    track_state.error_message = "No valid candidate chosen"
-                # Immediately advance to next track without waiting for file download!
-                return
+                    logger.warning(f"No valid candidate chosen to confirm for '{track.title}'")
+                    if not track_state.candidates:
+                        track_state.status = TrackStatus.NOT_FOUND
+                        track_state.error_message = "No candidates available to confirm. Please re-search or skip."
+                        continue
+                    else:
+                        track_state.status = TrackStatus.ERROR
+                        track_state.error_message = "No valid candidate chosen"
+                        return
             elif action == "retry":
                 track_state.status = TrackStatus.SEARCHING
                 continue

@@ -74,6 +74,12 @@ def build_pyinstaller():
         "--hidden-import", "playwright",
         "--hidden-import", "spotipy",
         "--hidden-import", "webview",
+        "--hidden-import", "certifi",
+        "--hidden-import", "pydantic_settings",
+        "--collect-all", "yt_dlp",
+        "--collect-all", "shazamio",
+        "--collect-all", "shazamio_core",
+        "--collect-all", "static_ffmpeg",
         str(BASE_DIR / "desktop.py")
     ]
 
@@ -111,6 +117,26 @@ def build_macos_dmg():
         print(f"⚠️ Could not create DMG via hdiutil: {e}")
 
 
+def build_windows_zip():
+    """Creates a Windows .zip distribution archive if on Windows."""
+    if platform.system().lower() != "windows":
+        return
+
+    app_dir = DIST_DIR / APP_NAME
+    zip_base = DIST_DIR / f"{APP_NAME}-Windows"
+
+    if not app_dir.exists():
+        print(f"⚠️ Windows build directory not found at {app_dir}, skipping ZIP creation.")
+        return
+
+    print("\n📦 Packaging Windows ZIP distribution...")
+    try:
+        zip_file = shutil.make_archive(str(zip_base), "zip", root_dir=DIST_DIR, base_dir=APP_NAME)
+        print(f"🎉 Created Windows ZIP at: {zip_file}")
+    except Exception as e:
+        print(f"⚠️ Could not create ZIP: {e}")
+
+
 def main():
     print(f"=" * 60)
     print(f"   Building {APP_NAME} Desktop Package ({platform.system()})")
@@ -121,6 +147,8 @@ def main():
 
     if platform.system().lower() == "darwin":
         build_macos_dmg()
+    elif platform.system().lower() == "windows":
+        build_windows_zip()
 
     print("\n" + "=" * 60)
     print(f"🎉 Build Complete! Artifacts located in:")
