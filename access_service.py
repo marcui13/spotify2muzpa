@@ -85,19 +85,22 @@ class AccessManager:
 
         # 1. Attempt network fetch
         if self.remote_url:
-            try:
-                async with httpx.AsyncClient(timeout=3.5, follow_redirects=True) as client:
-                    resp = await client.get(self.remote_url)
-                    if resp.status_code == 200:
-                        config = resp.json()
-                        self._cached_config = config
-                        self._cache_timestamp = now
-                        logger.info("Successfully fetched remote access configuration.")
-                        return config
-                    else:
-                        logger.warning(f"Remote access config returned status {resp.status_code}.")
-            except Exception as e:
-                logger.warning(f"Network error fetching remote access config: {e}")
+            urls_to_try = [self.remote_url]
+            if "/main/" in self.remote_url:
+                urls_to_try.append(self.remote_url.replace("/main/", "/feat/dj-set-track-identifier/"))
+
+            for url in urls_to_try:
+                try:
+                    async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+                        resp = await client.get(url)
+                        if resp.status_code == 200:
+                            config = resp.json()
+                            self._cached_config = config
+                            self._cache_timestamp = now
+                            logger.info("Successfully fetched remote access configuration.")
+                            return config
+                except Exception as e:
+                    logger.debug(f"Network error trying {url}: {e}")
 
         # 2. Memory cache fallback
         if self._cached_config:
@@ -110,7 +113,7 @@ class AccessManager:
                     config = json.load(f)
                     self._cached_config = config
                     self._cache_timestamp = now
-                    logger.info("Loaded access configuration from local fallback file.")
+                    logger.info("Remote config not published yet on GitHub. Loaded local access_control.json fallback.")
                     return config
             except Exception as e:
                 logger.error(f"Failed to read local fallback config: {e}")

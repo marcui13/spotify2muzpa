@@ -388,6 +388,11 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
+
 async def verify_access_or_raise():
     """Verifies that the application is authorized and active, or raises 403."""
     status = await access_manager.check_access()
