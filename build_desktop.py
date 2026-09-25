@@ -10,6 +10,13 @@ import platform
 import subprocess
 from pathlib import Path
 
+# Force UTF-8 on Windows stdout/stderr to avoid cp1252 charmap encoding crashes
+if sys.platform.startswith("win"):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 BASE_DIR = Path(__file__).resolve().parent
 DIST_DIR = BASE_DIR / "dist"
 BUILD_DIR = BASE_DIR / "build"
@@ -18,18 +25,18 @@ APP_NAME = "Spotify2MuzpaStudio"
 
 def run_command(cmd: list[str], description: str):
     """Runs a shell command and logs output."""
-    print(f"\n🚀 {description}...")
+    print(f"\n[RUN] {description}...")
     print(f"Executing: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=BASE_DIR)
     if result.returncode != 0:
-        print(f"❌ Error during: {description} (Exit code {result.returncode})")
+        print(f"[ERROR] Failed during: {description} (Exit code {result.returncode})")
         sys.exit(result.returncode)
-    print(f"✓ {description} completed successfully.")
+    print(f"[SUCCESS] {description} completed successfully.")
 
 
 def clean_previous_builds():
     """Removes previous build artifacts."""
-    print("\n🧹 Cleaning previous build artifacts...")
+    print("\n[CLEAN] Cleaning previous build artifacts...")
     for p in [BUILD_DIR, DIST_DIR]:
         if p.exists():
             shutil.rmtree(p)
@@ -98,10 +105,10 @@ def build_macos_dmg():
     dmg_path = DIST_DIR / f"{APP_NAME}-macOS.dmg"
 
     if not app_path.exists():
-        print(f"⚠️ App bundle not found at {app_path}, skipping DMG creation.")
+        print(f"[WARN] App bundle not found at {app_path}, skipping DMG creation.")
         return
 
-    print("\n📦 Generating macOS DMG Installer Image...")
+    print("\n[PACKAGE] Generating macOS DMG Installer Image...")
     if dmg_path.exists():
         dmg_path.unlink()
 
@@ -115,9 +122,9 @@ def build_macos_dmg():
     ]
     try:
         subprocess.run(dmg_cmd, check=True)
-        print(f"🎉 Created DMG Installer at: {dmg_path}")
+        print(f"[SUCCESS] Created DMG Installer at: {dmg_path}")
     except Exception as e:
-        print(f"⚠️ Could not create DMG via hdiutil: {e}")
+        print(f"[WARN] Could not create DMG via hdiutil: {e}")
 
 
 def build_windows_zip():
@@ -129,15 +136,15 @@ def build_windows_zip():
     zip_base = DIST_DIR / f"{APP_NAME}-Windows"
 
     if not app_dir.exists():
-        print(f"⚠️ Windows build directory not found at {app_dir}, skipping ZIP creation.")
+        print(f"[WARN] Windows build directory not found at {app_dir}, skipping ZIP creation.")
         return
 
-    print("\n📦 Packaging Windows ZIP distribution...")
+    print("\n[PACKAGE] Packaging Windows ZIP distribution...")
     try:
         zip_file = shutil.make_archive(str(zip_base), "zip", root_dir=DIST_DIR, base_dir=APP_NAME)
-        print(f"🎉 Created Windows ZIP at: {zip_file}")
+        print(f"[SUCCESS] Created Windows ZIP at: {zip_file}")
     except Exception as e:
-        print(f"⚠️ Could not create ZIP: {e}")
+        print(f"[WARN] Could not create ZIP: {e}")
 
 
 def main():
@@ -154,8 +161,8 @@ def main():
         build_windows_zip()
 
     print("\n" + "=" * 60)
-    print(f"🎉 Build Complete! Artifacts located in:")
-    print(f"   📂 {DIST_DIR}")
+    print(f"[COMPLETE] Build Complete! Artifacts located in:")
+    print(f"   Destination: {DIST_DIR}")
     print("=" * 60)
 
 

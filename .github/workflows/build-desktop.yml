@@ -45,6 +45,9 @@ jobs:
     needs: test
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -78,6 +81,9 @@ jobs:
     needs: test
     runs-on: macos-latest
     timeout-minutes: 25
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
