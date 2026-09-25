@@ -2116,7 +2116,30 @@
       const isFolder = job.playlist_id && job.playlist_id.startsWith("folder_");
       
       document.getElementById("playlistTitle").innerText = job.playlist_name;
-      document.getElementById("playlistMeta").innerText = `${job.tracks.length} tracks • ${isFolder ? 'Local Audio Directory' : job.playlist_url}`;
+
+      // Calculate total duration in hours and minutes
+      const totalMs = job.total_duration_ms || (job.tracks ? job.tracks.reduce((acc, t) => acc + (t.spotify_track ? (t.spotify_track.duration_ms || 0) : 0), 0) : 0);
+      const totalSec = Math.floor(totalMs / 1000);
+      const hrs = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+
+      let durStr = "";
+      if (hrs > 0) {
+        durStr = `${hrs} hr${hrs > 1 ? 's' : ''} ${mins} min${mins !== 1 ? 's' : ''}`;
+      } else if (mins > 0) {
+        durStr = `${mins} min${mins !== 1 ? 's' : ''}`;
+      }
+
+      const trackCountText = `${job.tracks.length} track${job.tracks.length === 1 ? '' : 's'}`;
+      const metaParts = [trackCountText];
+      if (durStr) metaParts.push(durStr);
+      if (isFolder) {
+        metaParts.push("Local Audio Directory");
+      } else if (job.playlist_url) {
+        metaParts.push(job.playlist_url);
+      }
+
+      document.getElementById("playlistMeta").innerText = metaParts.join(" • ");
       
       const reloadBtn = document.getElementById("bannerReloadBtn");
       if (reloadBtn) {
@@ -2293,6 +2316,7 @@
         item.innerHTML = `
           <div class="flex items-center gap-2.5 min-w-0">
             <span class="text-xs font-mono ${isCurrent ? 'text-spotify font-bold' : 'text-neutral-500'} w-5 text-right">${i + 1}</span>
+            ${tr.image_url ? `<img src="${escapeAttr(tr.image_url)}" class="w-8 h-8 rounded-lg object-cover shrink-0 bg-neutral-900 border border-white/10" alt="" onerror="this.style.display='none'">` : `<div class="w-8 h-8 rounded-lg bg-neutral-900 border border-white/5 flex items-center justify-center shrink-0 text-neutral-600"><i class="fa-solid fa-music text-[10px]"></i></div>`}
             <div class="min-w-0">
               <p class="text-xs font-semibold text-white truncate ${isCurrent ? 'text-spotify' : ''}">${escapeHtml(tr.title)}</p>
               <p class="text-[11px] text-spotify-muted truncate">${escapeHtml(tr.artist)}</p>
@@ -2355,6 +2379,8 @@
       
       if (tr.image_url) {
         document.getElementById("activeCover").src = tr.image_url;
+      } else {
+        document.getElementById("activeCover").src = "https://via.placeholder.com/80x80/222222/888888?text=Track";
       }
 
       const badge = document.getElementById("activeStatusBadge");

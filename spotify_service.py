@@ -145,15 +145,20 @@ class SpotifyService:
                 track_id = track_uri.split(":")[-1] if ":" in track_uri else f"track_{idx}_{playlist_id}"
                 spotify_url = f"https://open.spotify.com/track/{track_id}" if track_id else ""
 
+                # For albums, entity_name is the album name and entity_image is the album art.
+                # For playlists, entity_image is the PLAYLIST cover and must NOT be assigned to tracks.
+                track_album = entity_name if entity_type == "album" else "Unknown Album"
+                track_image = entity_image if entity_type in ("album", "track") else None
+
                 track_obj = SpotifyTrack(
                     id=track_id,
                     title=track_title,
                     artist=artist_str,
-                    album=entity_name,
+                    album=track_album,
                     duration_ms=duration_ms,
                     duration_str=duration_str,
                     spotify_url=spotify_url,
-                    image_url=entity_image,
+                    image_url=track_image,
                     preview_url=item.get("audioPreview", {}).get("url") if isinstance(item.get("audioPreview"), dict) else None
                 )
                 tracks.append(track_obj)
@@ -248,7 +253,15 @@ class SpotifyService:
                     images = playlist_meta.get("images", [])
                     playlist_image = images[0].get("url") if images else None
 
-                    tracks_data = playlist_meta.get("tracks", {}).get("items", [])
+                    tracks_results = playlist_meta.get("tracks", {})
+                    tracks_data = tracks_results.get("items", [])
+                    while tracks_results.get("next"):
+                        try:
+                            tracks_results = self._sp.next(tracks_results)
+                            tracks_data.extend(tracks_results.get("items", []))
+                        except Exception:
+                            break
+
                     if tracks_data:
                         tracks: List[SpotifyTrack] = []
                         for item in tracks_data:
@@ -260,16 +273,18 @@ class SpotifyService:
                             dur_ms = t.get("duration_ms", 0)
                             album_data = t.get("album", {})
                             album_images = album_data.get("images", [])
+                            album_name = album_data.get("name", "Unknown Album")
+                            track_image = album_images[0].get("url") if album_images else None
                             
                             tracks.append(SpotifyTrack(
                                 id=t["id"],
                                 title=t.get("name", "Unknown Title"),
                                 artist=artist_str,
-                                album=album_data.get("name", playlist_name),
+                                album=album_name,
                                 duration_ms=dur_ms,
                                 duration_str=self.format_duration(dur_ms),
                                 spotify_url=t.get("external_urls", {}).get("spotify", ""),
-                                image_url=album_images[0].get("url") if album_images else playlist_image,
+                                image_url=track_image,
                                 preview_url=t.get("preview_url")
                             ))
                         if tracks:
@@ -289,7 +304,7 @@ class SpotifyService:
 
         from audio_analyzer import pitch_and_mode_to_key, enrich_track_audio_features
 
-        # 1. Try Spotify Official API audio_features if client initialized
+        # 1. Try Spotify Official API audio_features and track metadata if client initialized
         if self._sp:
             valid_tracks = [t for t in tracks if t.id and not t.id.startswith("track_")]
             try:
@@ -317,6 +332,28 @@ class SpotifyService:
                             target.danceability = feat.get("danceability")
             except Exception as e:
                 logger.debug(f"Official audio features API notice: {e}")
+
+            # Fetch individual album artwork and album names for any tracks missing them
+            tracks_needing_art = [t for t in valid_tracks if not t.image_url]
+            if tracks_needing_art:
+                try:
+                    for i in range(0, len(tracks_needing_art), 50):
+                        chunk = tracks_needing_art[i:i+50]
+                        chunk_ids = [t.id for t in chunk]
+                        sp_res = self._sp.tracks(chunk_ids)
+                        for sp_t in sp_res.get("tracks", []):
+                            if not sp_t or not sp_t.get("id"):
+                                continue
+                            target = next((t for t in chunk if t.id == sp_t["id"]), None)
+                            if target:
+                                album_data = sp_t.get("album", {})
+                                imgs = album_data.get("images", [])
+                                if imgs and not target.image_url:
+                                    target.image_url = imgs[0].get("url")
+                                if album_data.get("name") and target.album in ("Unknown Album", "", None):
+                                    target.album = album_data["name"]
+                except Exception as e:
+                    logger.debug(f"Track album art enrichment notice: {e}")
 
         # 2. Multi-source fallback (Deezer API / Preview acoustic analysis / Filename / Cache) for any track missing BPM or Key
         for t in tracks:

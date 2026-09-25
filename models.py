@@ -5,7 +5,7 @@ Domain Models and Type Definitions for Spotify to Muzpa Downloader.
 from enum import Enum
 from typing import List, Optional, Dict, Any
 import re
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from datetime import datetime
 
 
@@ -192,6 +192,24 @@ class PlaylistJob(BaseModel):
         counts["TOTAL"] = len(self.tracks)
         counts["PERCENTAGE"] = int((counts[TrackStatus.COMPLETED.value] + counts[TrackStatus.SKIPPED.value]) / max(len(self.tracks), 1) * 100)
         return counts
+
+    @computed_field
+    @property
+    def total_duration_ms(self) -> int:
+        """Returns total duration of all tracks in milliseconds."""
+        return sum(t.spotify_track.duration_ms for t in self.tracks if t.spotify_track)
+
+    @computed_field
+    @property
+    def total_duration_str(self) -> str:
+        """Returns total duration formatted as e.g. '1 hr 45 min' or '38 min'."""
+        total_sec = self.total_duration_ms // 1000
+        hrs = total_sec // 3600
+        mins = (total_sec % 3600) // 60
+        if hrs > 0:
+            return f"{hrs} hr {mins} min" if mins > 0 else f"{hrs} hr"
+        return f"{mins} min"
+
 
 
 class DecisionRequest(BaseModel):

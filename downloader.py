@@ -34,7 +34,7 @@ def sanitize_filename(filename: str) -> str:
     return clean or "untitled"
 
 
-def tag_mp3_metadata(file_path: Path, track: SpotifyTrack) -> bool:
+def tag_mp3_metadata(file_path: Path, track: SpotifyTrack, playlist_image: Optional[str] = None) -> bool:
     """Tags downloaded MP3 file with Spotify metadata and DJ attributes (BPM, Key) using Mutagen."""
     try:
         if not file_path.exists() or file_path.stat().st_size == 0:
@@ -82,7 +82,9 @@ def tag_mp3_metadata(file_path: Path, track: SpotifyTrack) -> bool:
                 id3.add(COMM(encoding=3, lang="eng", desc="DJ_INFO", text=" | ".join(comment_parts)))
 
             # Fetch and embed high-res cover art from Spotify image_url
-            if track.image_url and str(track.image_url).startswith("http"):
+            # Rule: Only embed if it is genuine track artwork, and never overwrite with the playlist's cover.
+            is_playlist_art = bool(playlist_image and track.image_url and track.image_url == playlist_image)
+            if track.image_url and str(track.image_url).startswith("http") and not is_playlist_art:
                 try:
                     import requests
                     img_resp = requests.get(track.image_url, timeout=10)
@@ -98,9 +100,13 @@ def tag_mp3_metadata(file_path: Path, track: SpotifyTrack) -> bool:
                             desc="Cover",
                             data=img_resp.content
                         ))
-                        logger.debug(f"Embedded cover art ({len(img_resp.content)} bytes) into '{file_path.name}'")
+                        logger.debug(f"Embedded individual track cover art ({len(img_resp.content)} bytes) into '{file_path.name}'")
                 except Exception as img_err:
                     logger.debug(f"Could not download cover art for '{track.title}': {img_err}")
+            else:
+                # If track.image_url is missing or matches playlist_image, PRESERVE existing MP3 APIC cover art!
+                if id3.getall("APIC"):
+                    logger.debug(f"Preserving existing track cover art in '{file_path.name}'")
 
             id3.save(v2_version=3)
         except Exception as ex:
@@ -153,7 +159,8 @@ class MuzpaDownloader:
         self,
         playlist_name: str,
         track: SpotifyTrack,
-        candidate: MuzpaCandidate
+        candidate: MuzpaCandidate,
+        playlist_image: Optional[str] = None
     ) -> Path:
         """
         Downloads a candidate track directly into ~/Downloads/<Playlist Name>/Artist - Track.mp3
@@ -246,7 +253,7 @@ class MuzpaDownloader:
         temp_target_path.rename(target_path)
 
         # Apply ID3 tags
-        tag_mp3_metadata(target_path, track)
+        tag_mp3_metadata(target_path, track, playlist_image=playlist_image)
 
         logger.info(f"Download finished: '{target_path.name}' ({round(target_path.stat().st_size / (1024*1024), 2)} MB)")
         return target_path
@@ -391,7 +398,8 @@ class DownloadQueueManager:
                         file_path = await self.downloader.download_candidate(
                             playlist_name=job.playlist_name,
                             track=track,
-                            candidate=candidate
+                            candidate=candidate,
+                            playlist_image=getattr(job, "playlist_image", None)
                         )
                         track_state.downloaded_file_path = str(file_path)
                         track_state.status = TrackStatus.COMPLETED

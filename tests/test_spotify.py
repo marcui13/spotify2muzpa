@@ -166,3 +166,61 @@ def test_fetch_track_official_api():
         assert tracks[0].album == "Discovery"
 
 
+def test_fetch_playlist_tracks_preserve_individual_album_art():
+    from unittest.mock import MagicMock, patch
+    service = SpotifyService(client_id="dummy", client_secret="dummy")
+    service._sp = MagicMock()
+    service._sp.playlist.return_value = {
+        "name": "My Top 100",
+        "images": [{"url": "https://img.spotify.com/playlist_giant_cover.jpg"}],
+        "tracks": {
+            "items": [
+                {
+                    "track": {
+                        "id": "t_unique_1",
+                        "name": "Track A",
+                        "artists": [{"name": "Artist A"}],
+                        "duration_ms": 200000,
+                        "album": {
+                            "name": "Album A",
+                            "images": [{"url": "https://img.spotify.com/album_a_art.jpg"}]
+                        },
+                        "external_urls": {"spotify": "https://open.spotify.com/track/t_unique_1"},
+                        "preview_url": None
+                    }
+                },
+                {
+                    "track": {
+                        "id": "t_unique_2",
+                        "name": "Track B",
+                        "artists": [{"name": "Artist B"}],
+                        "duration_ms": 250000,
+                        "album": {
+                            "name": "Album B",
+                            "images": []
+                        },
+                        "external_urls": {"spotify": "https://open.spotify.com/track/t_unique_2"},
+                        "preview_url": None
+                    }
+                }
+            ],
+            "next": None
+        }
+    }
+
+    with patch.object(service, "enrich_tracks_with_audio_features"):
+        pl_name, pl_img, tracks = service.fetch_playlist("https://open.spotify.com/playlist/pl_123")
+        assert pl_name == "My Top 100"
+        assert pl_img == "https://img.spotify.com/playlist_giant_cover.jpg"
+        assert len(tracks) == 2
+
+        # Track 1 must have its own album cover, NEVER the playlist cover!
+        assert tracks[0].image_url == "https://img.spotify.com/album_a_art.jpg"
+        assert tracks[0].album == "Album A"
+
+        # Track 2 has no album images, so its image_url must be None (NEVER the playlist cover!)
+        assert tracks[1].image_url is None
+        assert tracks[1].album == "Album B"
+
+
+
