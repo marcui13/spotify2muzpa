@@ -15,7 +15,7 @@ from playwright.async_api import async_playwright, BrowserContext, Page, Element
 from rapidfuzz import fuzz
 
 from config import settings
-from models import SpotifyTrack, MuzpaCandidate
+from models import SpotifyTrack, MuzpaCandidate, clean_track_title
 
 logger = logging.getLogger("muzpa_crawler")
 
@@ -477,19 +477,42 @@ class MuzpaCrawlerEngine:
         return await self.autofill_login_form(submit=False)
 
     def calculate_fuzzy_score(self, target: SpotifyTrack, cand_title: str, cand_artist: str, cand_duration: str = "") -> float:
-        """Calculates a composite fuzzy match score (0 to 100)."""
+        """Calculates a composite fuzzy match score (0 to 100) taking cleaned titles and artist aliases into account."""
         target_title = target.title.lower().strip()
+        target_clean_title = target.clean_title.lower().strip()
         target_artist = target.artist.lower().strip()
+        target_primary_artist = target.primary_artist.lower().strip()
+
         c_title = cand_title.lower().strip()
+        c_clean_title = clean_track_title(cand_title).lower().strip()
         c_artist = cand_artist.lower().strip()
 
-        title_ratio = fuzz.token_set_ratio(target_title, c_title)
-        artist_ratio = fuzz.token_set_ratio(target_artist, c_artist)
+        # Score title: best of raw vs clean match
+        title_ratio = max(
+            fuzz.token_set_ratio(target_title, c_title),
+            fuzz.token_set_ratio(target_clean_title, c_clean_title),
+            fuzz.token_set_ratio(target_clean_title, c_title)
+        )
+
+        # Score artist: compare both full artist string and primary artist
+        artist_ratio = max(
+            fuzz.token_set_ratio(target_artist, c_artist),
+            fuzz.token_set_ratio(target_primary_artist, c_artist)
+        )
 
         target_full = f"{target_artist} - {target_title}"
         cand_full = f"{c_artist} - {c_title}"
-        full_ratio = fuzz.token_set_ratio(target_full, cand_full)
-        sort_ratio = fuzz.token_sort_ratio(target_full, cand_full)
+        target_clean_full = f"{target_primary_artist} - {target_clean_title}"
+        cand_clean_full = f"{c_artist} - {c_clean_title}"
+
+        full_ratio = max(
+            fuzz.token_set_ratio(target_full, cand_full),
+            fuzz.token_set_ratio(target_clean_full, cand_clean_full)
+        )
+        sort_ratio = max(
+            fuzz.token_sort_ratio(target_full, cand_full),
+            fuzz.token_sort_ratio(target_clean_full, cand_clean_full)
+        )
 
         composite_score = (title_ratio * 0.40) + (artist_ratio * 0.30) + ((full_ratio + sort_ratio) / 2 * 0.30)
 
@@ -515,43 +538,49 @@ class MuzpaCrawlerEngine:
             if not self._is_initialized:
                 await self.initialize()
 
-            query = custom_query or track.clean_search_query
-            logger.info(f"Searching Muzpa for: '{query}'")
-
-            encoded_query = urllib.parse.quote(query)
-            search_url = f"{settings.MUZPA_BASE_URL}/#/search?text={encoded_query}"
-
-            try:
-                await self._page.goto(search_url, wait_until="domcontentloaded", timeout=settings.PAGE_LOAD_TIMEOUT_MS)
-            except Exception as e:
-                logger.warning(f"Goto timeout/issue, retrying search navigation: {e}")
-                await self._page.goto(search_url, timeout=settings.PAGE_LOAD_TIMEOUT_MS)
-
-            await asyncio.sleep(settings.RATE_LIMIT_DELAY_SECONDS)
-
-            selectors = [
-                "ms-release-track",
-                ".ms-release-track",
-                "div.release-track",
-                "table.tracks-table tr",
-                ".search-results .track",
-                ".track-row"
-            ]
-
+            # Queries to try: custom query if provided, otherwise prioritized clean queries
+            queries_to_try = [custom_query] if custom_query else track.search_queries[:2]
             track_elements: List[ElementHandle] = []
-            for selector in selectors:
-                try:
-                    await self._page.wait_for_selector(selector, timeout=4000)
-                    track_elements = await self._page.query_selector_all(selector)
-                    if track_elements:
-                        break
-                except PlaywrightTimeoutError:
-                    continue
 
-            if not track_elements:
-                download_btns = await self._page.query_selector_all("a.ms-release-dwnldbtn, button.download, a[href*='download']")
-                if download_btns:
-                    track_elements = download_btns
+            for q_idx, query in enumerate(queries_to_try):
+                logger.info(f"Searching Muzpa for: '{query}'" + (f" (fallback #{q_idx})" if q_idx > 0 else ""))
+
+                encoded_query = urllib.parse.quote(query)
+                search_url = f"{settings.MUZPA_BASE_URL}/#/search?text={encoded_query}"
+
+                try:
+                    await self._page.goto(search_url, wait_until="domcontentloaded", timeout=settings.PAGE_LOAD_TIMEOUT_MS)
+                except Exception as e:
+                    logger.warning(f"Goto timeout/issue, retrying search navigation: {e}")
+                    await self._page.goto(search_url, timeout=settings.PAGE_LOAD_TIMEOUT_MS)
+
+                await asyncio.sleep(settings.RATE_LIMIT_DELAY_SECONDS)
+
+                selectors = [
+                    "ms-release-track",
+                    ".ms-release-track",
+                    "div.release-track",
+                    "table.tracks-table tr",
+                    ".search-results .track",
+                    ".track-row"
+                ]
+
+                for selector in selectors:
+                    try:
+                        await self._page.wait_for_selector(selector, timeout=4000)
+                        track_elements = await self._page.query_selector_all(selector)
+                        if track_elements:
+                            break
+                    except PlaywrightTimeoutError:
+                        continue
+
+                if not track_elements:
+                    download_btns = await self._page.query_selector_all("a.ms-release-dwnldbtn, button.download, a[href*='download']")
+                    if download_btns:
+                        track_elements = download_btns
+
+                if track_elements:
+                    break
 
             candidates: List[MuzpaCandidate] = []
 
