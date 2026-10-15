@@ -49,6 +49,8 @@ spotify2muzpa/
 ├── config.py             # Centralized settings (Pydantic BaseSettings & .env loader)
 ├── models.py             # Strongly typed Pydantic models (SpotifyTrack, MuzpaCandidate, TrackState, PlaylistJob)
 ├── spotify_service.py    # Spotify extraction client with official API + Next.js embed fallback parser
+├── playlist_filter_service.py # Prompt parsing, fuzzy track matching, and sub-playlist filter engine
+├── filter_playlist.py    # Standalone CLI for filtering Spotify playlists and creating sub-playlists
 ├── dj_set_service.py     # Hybrid YouTube/SoundCloud DJ set tracklist parser & acoustic Shazam analyzer
 ├── muzpa_crawler.py      # Playwright browser automation, multi-tab manager, AngularJS reactive auto-fill
 ├── audio_analyzer.py     # BPM & Camelot Wheel harmonic key analyzer (pitch/mode translation)
@@ -64,6 +66,7 @@ spotify2muzpa/
 │   ├── test_dj_set_service.py # Tests for timestamp parsing, chapters, deduplication and 429 retry
 │   ├── test_downloader.py     # Tests for filename sanitization and state persistence
 │   ├── test_fuzzy.py          # Tests for RapidFuzz similarity scoring and penalties
+│   ├── test_playlist_filter.py# Tests for playlist filtering, prompt parsing, and sub-playlist creation
 │   ├── test_server.py         # Tests for FastAPI endpoints and state schemas
 │   └── test_spotify.py        # Tests for Spotify URL/URI parsing and duration formatters
 ├── requirements.txt      # Production and development dependencies

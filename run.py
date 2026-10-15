@@ -204,6 +204,8 @@ def main():
     parser = argparse.ArgumentParser(description="Spotify to Muzpa Downloader Studio")
     parser.add_argument("--server", action="store_true", help="Launch web dashboard server")
     parser.add_argument("--playlist-url", type=str, help="Spotify playlist URL or URI")
+    parser.add_argument("--filter-playlist", type=str, help="Spotify playlist URL or natural prompt to filter and create sub-playlist")
+    parser.add_argument("--query", "-q", type=str, default="", help="Query or artist name for playlist filtering")
     parser.add_argument("--auto", action="store_true", help="Enable 100% automatic download mode")
     parser.add_argument("--threshold", type=float, default=75.0, help="Similarity threshold for auto mode (0-100)")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
@@ -212,6 +214,16 @@ def main():
     parser.add_argument("--port", type=int, default=settings.PORT, help="Web server port")
 
     args = parser.parse_args()
+
+    # If filtering playlist, run filter CLI directly
+    if args.filter_playlist:
+        from filter_playlist import run_filter_cli
+        # Forward sys.argv with --url and --query
+        sys.argv = [sys.argv[0], "--url", args.filter_playlist]
+        if args.query:
+            sys.argv.extend(["--query", args.query])
+        run_filter_cli()
+        return
 
     # Browser selection
     chosen_browser = args.browser

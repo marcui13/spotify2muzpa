@@ -7,7 +7,9 @@ and resilient web-embed fallback to ensure 100% extraction success.
 import os
 import re
 import json
+import time
 import logging
+import concurrent.futures
 from typing import List, Tuple, Optional, Dict, Any
 import requests
 import spotipy
@@ -17,6 +19,7 @@ from config import settings
 from models import SpotifyTrack
 
 logger = logging.getLogger("spotify_service")
+logging.getLogger("spotipy.client").setLevel(logging.ERROR)
 
 
 class SpotifyService:
@@ -25,6 +28,9 @@ class SpotifyService:
         self.client_secret = client_secret or settings.SPOTIFY_CLIENT_SECRET
         self._sp: Optional[spotipy.Spotify] = None
         self._oauth_manager: Optional[SpotifyOAuth] = None
+        self._audio_features_disabled: bool = False
+        self._tracks_api_disabled: bool = False
+        self._pathfinder_session: Optional[Dict[str, Any]] = None
         self._initialize_client()
         self._initialize_oauth_manager()
 
@@ -183,18 +189,202 @@ class SpotifyService:
         logger.info(f"Embed parser successfully loaded '{entity_name}' ({entity_type}) with {len(tracks)} tracks.")
         return entity_name, entity_image, tracks
 
+    def _get_pathfinder_session(self, playlist_id: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Captures or returns cached Spotify Web Pathfinder session headers and query hash
+        via headless browser interception.
+        """
+        if not force_refresh and self._pathfinder_session:
+            timestamp = self._pathfinder_session.get("timestamp", 0)
+            if time.time() - timestamp < 3000:  # Valid for ~50 minutes
+                return self._pathfinder_session
+
+        def _capture():
+            from playwright.sync_api import sync_playwright
+            captured = {}
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+
+                def on_request(request):
+                    if "pathfinder/v2/query" in request.url:
+                        try:
+                            d = request.post_data_json
+                            if d and "fetchPlaylist" in str(d.get("operationName")):
+                                captured["headers"] = dict(request.headers)
+                                sha = d.get("extensions", {}).get("persistedQuery", {}).get("sha256Hash")
+                                if sha:
+                                    captured["sha256"] = sha
+                        except Exception:
+                            pass
+
+                page.on("request", on_request)
+                page.goto(f"https://open.spotify.com/playlist/{playlist_id}", wait_until="networkidle", timeout=30000)
+                browser.close()
+            return captured
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                res = pool.submit(_capture).result(timeout=35)
+                if res and res.get("headers"):
+                    self._pathfinder_session = {
+                        "headers": res["headers"],
+                        "sha256": res.get("sha256", "8964e8eafb21aa992a7d951d256d83285c04be2105d209262901de70cb97584a"),
+                        "timestamp": time.time(),
+                    }
+                    return self._pathfinder_session
+        except Exception as e:
+            logger.warning(f"Notice initializing Spotify Pathfinder session: {e}")
+
+        return None
+
+    def fetch_playlist_via_pathfinder(self, playlist_id: str) -> Tuple[str, Optional[str], List[SpotifyTrack]]:
+        """
+        Fetches all tracks from a public Spotify playlist using Spotify Web Pathfinder GraphQL API.
+        Paginates beyond the 100-track embed limit (e.g., 300+, 1,000+ tracks) with native
+        audio attributes (BPM and Camelot key).
+        """
+        session = self._get_pathfinder_session(playlist_id)
+        if not session:
+            raise RuntimeError("Spotify Pathfinder session could not be established")
+
+        headers = session["headers"]
+        sha_hash = session.get("sha256", "8964e8eafb21aa992a7d951d256d83285c04be2105d209262901de70cb97584a")
+
+        all_tracks: List[SpotifyTrack] = []
+        offset = 0
+        limit = 100
+        total: Optional[int] = None
+        playlist_name = f"Playlist_{playlist_id}"
+        playlist_image = None
+        refreshed = False
+
+        while total is None or offset < total:
+            payload = {
+                "operationName": "fetchPlaylist",
+                "variables": {
+                    "uri": f"spotify:playlist:{playlist_id}",
+                    "offset": offset,
+                    "limit": limit,
+                    "enableWatchFeedEntrypoint": False,
+                    "includeEpisodeContentRatingsV2": True,
+                },
+                "extensions": {
+                    "persistedQuery": {
+                        "version": 1,
+                        "sha256Hash": sha_hash,
+                    }
+                },
+            }
+
+            resp = requests.post(
+                "https://api-partner.spotify.com/pathfinder/v2/query",
+                headers=headers,
+                json=payload,
+                timeout=15,
+            )
+
+            # Handle expired token / 401 / 403
+            if resp.status_code in (401, 403) and not refreshed:
+                logger.info("Pathfinder token expired or rejected, refreshing session...")
+                session = self._get_pathfinder_session(playlist_id, force_refresh=True)
+                if not session:
+                    raise RuntimeError("Failed to refresh Spotify Pathfinder session")
+                headers = session["headers"]
+                sha_hash = session.get("sha256", sha_hash)
+                refreshed = True
+                continue
+
+            if resp.status_code != 200:
+                raise RuntimeError(f"Spotify Pathfinder query failed with HTTP {resp.status_code}")
+
+            data = resp.json()
+            pl_v2 = data.get("data", {}).get("playlistV2", {})
+            if not pl_v2:
+                break
+
+            if offset == 0:
+                if pl_v2.get("name"):
+                    playlist_name = pl_v2["name"]
+                img_items = pl_v2.get("images", {}).get("items", [])
+                if img_items and img_items[0].get("sources"):
+                    playlist_image = img_items[0]["sources"][0].get("url")
+
+            content = pl_v2.get("content", {})
+            total = content.get("totalCount")
+            items = content.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                t_data = item.get("itemV2", {}).get("data")
+                if not t_data or t_data.get("__typename") != "Track":
+                    continue
+
+                uri = t_data.get("uri", "")
+                t_id = uri.split(":")[-1] if ":" in uri else f"track_{len(all_tracks)}_{playlist_id}"
+
+                artists = [
+                    a.get("profile", {}).get("name")
+                    for a in t_data.get("artists", {}).get("items", [])
+                    if a.get("profile", {}).get("name")
+                ]
+                artist_str = ", ".join(artists) if artists else "Unknown Artist"
+
+                dur_ms = t_data.get("trackDuration", {}).get("totalMilliseconds", 0)
+                album_data = t_data.get("albumOfTrack", {})
+                album_name = album_data.get("name", "Unknown Album")
+                cover_sources = album_data.get("coverArt", {}).get("sources", [])
+                img_url = cover_sources[0].get("url") if cover_sources else None
+
+                audio_attrs = t_data.get("playlistAudioAttributes") or {}
+                bpm = int(round(audio_attrs.get("bpm"))) if audio_attrs.get("bpm") else None
+                key_info = audio_attrs.get("key") or {}
+                cam_key = key_info.get("camelotKey", {}).get("value") if isinstance(key_info.get("camelotKey"), dict) else None
+                mus_key = key_info.get("key")
+                if mus_key and key_info.get("mode") == "MODE_MINOR" and not mus_key.endswith("m"):
+                    mus_key = f"{mus_key}m"
+
+                st = SpotifyTrack(
+                    id=t_id,
+                    title=t_data.get("name", "Unknown Title"),
+                    artist=artist_str,
+                    album=album_name,
+                    duration_ms=dur_ms,
+                    duration_str=self.format_duration(dur_ms),
+                    spotify_url=f"https://open.spotify.com/track/{t_id}" if t_id else "",
+                    image_url=img_url,
+                    bpm=bpm,
+                    camelot_key=cam_key,
+                    musical_key=mus_key,
+                )
+                all_tracks.append(st)
+
+            offset += len(items)
+
+        if not all_tracks:
+            raise RuntimeError(f"No tracks found in playlist {playlist_id} via Pathfinder")
+
+        self.enrich_tracks_with_audio_features(all_tracks)
+        logger.info(f"Pathfinder API successfully loaded '{playlist_name}' with {len(all_tracks)} tracks.")
+        return playlist_name, playlist_image, all_tracks
+
     def fetch_playlist(self, playlist_url_or_id: str) -> Tuple[str, Optional[str], List[SpotifyTrack]]:
         """
-        Fetches playlist, album, or track details and tracks with auto fallback.
+        Fetches playlist, album, or track details and tracks with auto fallback:
+        1. Official Spotify API (User client or ClientCredentials)
+        2. Spotify Web Pathfinder GraphQL API (for full pagination beyond 100 tracks)
+        3. Spotify Embed parser (guaranteed fallback)
         """
         entity_type, entity_id = self.parse_spotify_entity(playlist_url_or_id)
 
-        # 1. Try official Spotipy API if initialized
-        if self._sp:
+        # 1. Try official Spotipy API (User client prioritized over ClientCredentials)
+        active_sp = self.get_user_client() or self._sp
+        if active_sp:
             try:
                 if entity_type == "album":
                     logger.info(f"Attempting official Spotify API for Album ID: {entity_id}")
-                    album_meta = self._sp.album(entity_id)
+                    album_meta = active_sp.album(entity_id)
                     album_name = album_meta.get("name", f"Album_{entity_id}")
                     images = album_meta.get("images", [])
                     album_image = images[0].get("url") if images else None
@@ -224,7 +414,7 @@ class SpotifyService:
 
                 elif entity_type == "track":
                     logger.info(f"Attempting official Spotify API for Track ID: {entity_id}")
-                    track_meta = self._sp.track(entity_id)
+                    track_meta = active_sp.track(entity_id)
                     track_name = track_meta.get("name", f"Track_{entity_id}")
                     artists = [a.get("name", "") for a in track_meta.get("artists", []) if a.get("name")]
                     artist_str = ", ".join(artists) if artists else "Unknown Artist"
@@ -248,7 +438,7 @@ class SpotifyService:
 
                 else: # Default playlist
                     logger.info(f"Attempting official Spotify API for Playlist ID: {entity_id}")
-                    playlist_meta = self._sp.playlist(entity_id)
+                    playlist_meta = active_sp.playlist(entity_id)
                     playlist_name = playlist_meta.get("name", f"Playlist_{entity_id}")
                     images = playlist_meta.get("images", [])
                     playlist_image = images[0].get("url") if images else None
@@ -257,7 +447,7 @@ class SpotifyService:
                     tracks_data = tracks_results.get("items", [])
                     while tracks_results.get("next"):
                         try:
-                            tracks_results = self._sp.next(tracks_results)
+                            tracks_results = active_sp.next(tracks_results)
                             tracks_data.extend(tracks_results.get("items", []))
                         except Exception:
                             break
@@ -289,12 +479,19 @@ class SpotifyService:
                             ))
                         if tracks:
                             self.enrich_tracks_with_audio_features(tracks)
-                            logger.info(f"API loaded '{playlist_name}' with {len(tracks)} tracks (with BPM & Harmonic Key data).")
+                            logger.info(f"API loaded '{playlist_name}' with {len(tracks)} tracks.")
                             return playlist_name, playlist_image, tracks
             except Exception as e:
-                logger.info(f"Official API request fell back to embed parser: {e}")
+                logger.info(f"Official API request fell back to Pathfinder/embed: {e}")
 
-        # 2. Resilient Embed parser
+        # 2. Spotify Web Pathfinder GraphQL API for full playlist pagination (300+ tracks)
+        if entity_type == "playlist":
+            try:
+                return self.fetch_playlist_via_pathfinder(entity_id)
+            except Exception as pe:
+                logger.info(f"Pathfinder extraction fell back to embed parser: {pe}")
+
+        # 3. Resilient Embed parser (fallback up to 100 tracks)
         return self.fetch_playlist_via_embed(entity_id, entity_type=entity_type)
 
     def enrich_tracks_with_audio_features(self, tracks: List[SpotifyTrack]) -> None:
@@ -305,35 +502,43 @@ class SpotifyService:
         from audio_analyzer import pitch_and_mode_to_key, enrich_track_audio_features
 
         # 1. Try Spotify Official API audio_features and track metadata if client initialized
-        if self._sp:
-            valid_tracks = [t for t in tracks if t.id and not t.id.startswith("track_")]
-            try:
-                for i in range(0, len(valid_tracks), 100):
-                    chunk = valid_tracks[i:i+100]
-                    chunk_ids = [t.id for t in chunk]
-                    features_list = self._sp.audio_features(chunk_ids)
-                    if not features_list:
-                        continue
-
-                    for feat in features_list:
-                        if not feat:
+        if self._sp and not self._audio_features_disabled:
+            valid_tracks = [t for t in tracks if t.id and not t.id.startswith("track_") and (not t.bpm or not t.camelot_key)]
+            if valid_tracks:
+                try:
+                    for i in range(0, len(valid_tracks), 100):
+                        chunk = valid_tracks[i:i+100]
+                        chunk_ids = [t.id for t in chunk]
+                        features_list = self._sp.audio_features(chunk_ids)
+                        if not features_list:
                             continue
-                        t_id = feat.get("id")
-                        target = next((t for t in chunk if t.id == t_id), None)
-                        if target:
-                            raw_tempo = feat.get("tempo")
-                            if raw_tempo:
-                                target.bpm = int(round(raw_tempo))
-                            
-                            mus_key, cam_key = pitch_and_mode_to_key(feat.get("key"), feat.get("mode"))
-                            target.musical_key = mus_key
-                            target.camelot_key = cam_key
-                            target.energy = feat.get("energy")
-                            target.danceability = feat.get("danceability")
-            except Exception as e:
-                logger.debug(f"Official audio features API notice: {e}")
 
-            # Fetch individual album artwork and album names for any tracks missing them
+                        for feat in features_list:
+                            if not feat:
+                                continue
+                            t_id = feat.get("id")
+                            target = next((t for t in chunk if t.id == t_id), None)
+                            if target:
+                                raw_tempo = feat.get("tempo")
+                                if raw_tempo:
+                                    target.bpm = int(round(raw_tempo))
+                                
+                                mus_key, cam_key = pitch_and_mode_to_key(feat.get("key"), feat.get("mode"))
+                                target.musical_key = mus_key
+                                target.camelot_key = cam_key
+                                target.energy = feat.get("energy")
+                                target.danceability = feat.get("danceability")
+                except spotipy.SpotifyException as se:
+                    if se.http_status in (403, 404):
+                        self._audio_features_disabled = True
+                        logger.debug(f"Official audio features API restricted (HTTP {se.http_status}), falling back to Deezer/acoustic analyzer.")
+                    else:
+                        logger.debug(f"Official audio features API notice: {se}")
+                except Exception as e:
+                    logger.debug(f"Official audio features API notice: {e}")
+
+        if self._sp and not self._tracks_api_disabled:
+            valid_tracks = [t for t in tracks if t.id and not t.id.startswith("track_")]
             tracks_needing_art = [t for t in valid_tracks if not t.image_url]
             if tracks_needing_art:
                 try:
@@ -352,6 +557,12 @@ class SpotifyService:
                                     target.image_url = imgs[0].get("url")
                                 if album_data.get("name") and target.album in ("Unknown Album", "", None):
                                     target.album = album_data["name"]
+                except spotipy.SpotifyException as se:
+                    if se.http_status in (403, 404):
+                        self._tracks_api_disabled = True
+                        logger.debug(f"Official tracks bulk API restricted (HTTP {se.http_status}).")
+                    else:
+                        logger.debug(f"Track album art enrichment notice: {se}")
                 except Exception as e:
                     logger.debug(f"Track album art enrichment notice: {e}")
 

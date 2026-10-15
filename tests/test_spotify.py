@@ -223,4 +223,147 @@ def test_fetch_playlist_tracks_preserve_individual_album_art():
         assert tracks[1].album == "Album B"
 
 
+def test_fetch_playlist_via_pathfinder_pagination_mocked():
+    from unittest.mock import MagicMock, patch
+    service = SpotifyService(client_id="dummy", client_secret="dummy")
+    
+    mock_session = {
+        "headers": {"authorization": "Bearer mock_token"},
+        "sha256": "mock_sha",
+        "timestamp": 123456789.0
+    }
+
+    # Simulate 2 batches: batch 1 has 2 tracks, batch 2 has 1 track (total 3)
+    def mock_post(url, headers, json, timeout):
+        offset = json["variables"]["offset"]
+        resp = MagicMock()
+        resp.status_code = 200
+        if offset == 0:
+            resp.json.return_value = {
+                "data": {
+                    "playlistV2": {
+                        "name": "Progressive Vibes",
+                        "images": {"items": [{"sources": [{"url": "https://img.spotify.com/pl.jpg"}]}]},
+                        "content": {
+                            "totalCount": 3,
+                            "items": [
+                                {
+                                    "itemV2": {
+                                        "data": {
+                                            "__typename": "Track",
+                                            "name": "Nirvana",
+                                            "uri": "spotify:track:t1",
+                                            "trackDuration": {"totalMilliseconds": 480000},
+                                            "artists": {"items": [{"profile": {"name": "Guy J"}}]},
+                                            "albumOfTrack": {
+                                                "name": "Lost & Found Vol 1",
+                                                "coverArt": {"sources": [{"url": "https://img.spotify.com/t1.jpg"}]}
+                                            },
+                                            "playlistAudioAttributes": {
+                                                "bpm": 124.0,
+                                                "key": {"camelotKey": {"value": "8A"}, "key": "A", "mode": "MODE_MINOR"}
+                                            }
+                                        }
+                                    }
+                                },
+                                {
+                                    "itemV2": {
+                                        "data": {
+                                            "__typename": "Track",
+                                            "name": "Aurora",
+                                            "uri": "spotify:track:t2",
+                                            "trackDuration": {"totalMilliseconds": 510000},
+                                            "artists": {"items": [{"profile": {"name": "Guy J"}}]},
+                                            "albumOfTrack": {
+                                                "name": "Lost & Found Vol 1",
+                                                "coverArt": {"sources": [{"url": "https://img.spotify.com/t2.jpg"}]}
+                                            },
+                                            "playlistAudioAttributes": {
+                                                "bpm": 123.0,
+                                                "key": {"camelotKey": {"value": "11B"}, "key": "A", "mode": "MODE_MAJOR"}
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        else:
+            resp.json.return_value = {
+                "data": {
+                    "playlistV2": {
+                        "content": {
+                            "totalCount": 3,
+                            "items": [
+                                {
+                                    "itemV2": {
+                                        "data": {
+                                            "__typename": "Track",
+                                            "name": "Lamur - Guy J Remix",
+                                            "uri": "spotify:track:t3",
+                                            "trackDuration": {"totalMilliseconds": 540000},
+                                            "artists": {"items": [{"profile": {"name": "Guy Gerber"}}, {"profile": {"name": "Guy J"}}]},
+                                            "albumOfTrack": {
+                                                "name": "Lamur",
+                                                "coverArt": {"sources": [{"url": "https://img.spotify.com/t3.jpg"}]}
+                                            },
+                                            "playlistAudioAttributes": {
+                                                "bpm": 125.0,
+                                                "key": {"camelotKey": {"value": "2A"}, "key": "E", "mode": "MODE_MINOR"}
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        return resp
+
+    with patch.object(service, "_get_pathfinder_session", return_value=mock_session), \
+         patch("requests.post", side_effect=mock_post), \
+         patch.object(service, "enrich_tracks_with_audio_features"):
+        name, img, tracks = service.fetch_playlist_via_pathfinder("dummy_pl")
+        assert name == "Progressive Vibes"
+        assert img == "https://img.spotify.com/pl.jpg"
+        assert len(tracks) == 3
+        assert tracks[0].title == "Nirvana"
+        assert tracks[0].artist == "Guy J"
+        assert tracks[0].bpm == 124
+        assert tracks[0].camelot_key == "8A"
+        assert tracks[0].musical_key == "Am"
+
+        assert tracks[1].title == "Aurora"
+        assert tracks[1].bpm == 123
+        assert tracks[1].camelot_key == "11B"
+        assert tracks[1].musical_key == "A"
+
+        assert tracks[2].title == "Lamur - Guy J Remix"
+        assert tracks[2].artist == "Guy Gerber, Guy J"
+        assert tracks[2].bpm == 125
+        assert tracks[2].camelot_key == "2A"
+        assert tracks[2].musical_key == "Em"
+
+
+def test_fetch_playlist_fallback_from_api_to_pathfinder():
+    from unittest.mock import MagicMock, patch
+    service = SpotifyService(client_id="dummy", client_secret="dummy")
+    service._sp = MagicMock()
+    service._sp.playlist.side_effect = Exception("HTTP 403 not allowed by policy")
+
+    expected_tracks = [
+        SpotifyTrack(id="t1", title="Test Track", artist="Test Artist", album="Test Album", duration_ms=180000, duration_str="03:00")
+    ]
+
+    with patch.object(service, "fetch_playlist_via_pathfinder", return_value=("Pathfinder Playlist", "https://img.jpg", expected_tracks)) as mock_pf:
+        name, img, tracks = service.fetch_playlist("https://open.spotify.com/playlist/pl_test_123")
+        assert mock_pf.called
+        assert name == "Pathfinder Playlist"
+        assert len(tracks) == 1
+        assert tracks[0].title == "Test Track"
+
+
 

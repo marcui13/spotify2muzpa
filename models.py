@@ -274,3 +274,22 @@ class DJSetToPlaylistRequest(BaseModel):
     selected_indices: Optional[List[int]] = None
     auto_mode: bool = Field(default=False)
     similarity_threshold: float = Field(default=75.0)
+
+
+class PlaylistFilterRequest(BaseModel):
+    playlist_url: str = Field(description="Spotify playlist, album, or track URL / URI or natural prompt")
+    query: str = Field(default="", description="Search term, artist name, title or natural prompt")
+    filter_by: str = Field(default="all", description="Field to match: 'all', 'artist', 'title', 'key', 'bpm'")
+    min_bpm: Optional[int] = Field(default=None, description="Minimum BPM constraint")
+    max_bpm: Optional[int] = Field(default=None, description="Maximum BPM constraint")
+    camelot_key: Optional[str] = Field(default=None, description="Camelot key signature e.g. 8A, 11B")
+    min_score: float = Field(default=75.0, description="Minimum fuzzy matching score (0-100)")
+
+
+class CreateFilteredPlaylistRequest(BaseModel):
+    playlist_name: str = Field(description="Name of the new playlist to create on Spotify")
+    description: Optional[str] = Field(default="Filtered with Spotify2Muzpa Studio", description="Playlist description")
+    track_uris: List[str] = Field(description="List of Spotify track URIs or IDs to include")
+    is_public: bool = Field(default=True, description="Whether the created playlist is public")
+    download_to_muzpa: bool = Field(default=False, description="Optionally also enqueue to Muzpa crawler for download")
+

@@ -132,9 +132,12 @@
       <div class="absolute -right-20 -top-20 w-60 h-60 bg-spotify/10 rounded-full blur-3xl pointer-events-none" aria-hidden="true"></div>
 
       <!-- Source Selection Tabs -->
-      <div class="flex items-center gap-2 mb-4 border-b border-spotify-border pb-3 relative z-10">
+      <div class="flex items-center gap-2 mb-4 border-b border-spotify-border pb-3 relative z-10 flex-wrap">
         <button id="srcTabSpotifyBtn" onclick="switchSourceTab('spotify')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify text-black transition shadow-sm">
           <i class="fa-brands fa-spotify text-sm" aria-hidden="true"></i> <span>Spotify Playlist</span>
+        </button>
+        <button id="srcTabFilterBtn" onclick="switchSourceTab('filter')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
+          <i class="fa-solid fa-filter text-cyan-400 text-sm" aria-hidden="true"></i> <span>Filter & Sub-Playlist</span>
         </button>
         <button id="srcTabFolderBtn" onclick="switchSourceTab('folder')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
           <i class="fa-solid fa-folder-open text-amber-400 text-sm" aria-hidden="true"></i> <span>Local Audio Folder</span>
@@ -162,6 +165,101 @@
             <button onclick="loadPlaylist(true)" id="reloadFreshBtn" title="Fetch fresh playlist from Spotify API & reset all saved progress" class="bg-spotify-light hover:bg-spotify-card-hover text-cyan-300 border border-spotify-border font-bold px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 transition shadow shrink-0">
               <i class="fa-solid fa-arrows-rotate text-cyan-400" aria-hidden="true"></i> <span class="hidden sm:inline">Reload Fresh</span>
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Playlist Filter & Sub-Playlist Group -->
+      <div id="srcFilterGroup" class="hidden flex flex-col gap-4 relative z-10">
+        <div class="w-full flex-1">
+          <div class="flex items-center justify-between mb-1.5">
+            <label for="filterPlaylistInput" class="block text-xs font-bold text-cyan-400 uppercase tracking-wider">
+              Filtrar Playlist de Spotify y Crear Sub-Playlist
+            </label>
+            <span class="text-[11px] text-spotify-muted font-mono hidden sm:inline">Fuzzy matching & normalización inteligente (ej: "guyj" ➔ "Guy J")</span>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-2">
+            <!-- Spotify Playlist URL or Smart Prompt -->
+            <div class="md:col-span-6 relative">
+              <i class="fa-brands fa-spotify absolute left-3.5 top-1/2 -translate-y-1/2 text-cyan-400 text-sm" aria-hidden="true"></i>
+              <input type="text" id="filterPlaylistInput" placeholder="URL o prompt (ej: 'quiero los tracks de guyj que hay acá https://...')" 
+                class="w-full bg-spotify-light border border-spotify-border rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-neutral-500 focus:border-cyan-400 transition shadow-inner font-mono">
+            </div>
+
+            <!-- Filter Query -->
+            <div class="md:col-span-3 relative">
+              <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 text-xs" aria-hidden="true"></i>
+              <input type="text" id="filterQueryInput" placeholder="Filtro / Artista (ej: Guy J, Remix, 8A)" 
+                class="w-full bg-spotify-light border border-spotify-border rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-neutral-500 focus:border-cyan-400 transition shadow-inner">
+            </div>
+
+            <!-- Filter Mode Selector -->
+            <div class="md:col-span-3 flex gap-2">
+              <select id="filterBySelect" class="bg-spotify-light border border-spotify-border rounded-xl px-2.5 py-2 text-xs text-neutral-200 focus:border-cyan-400 transition outline-none font-medium flex-1">
+                <option value="all">Todo (Artista, Título)</option>
+                <option value="artist">Solo Artista & Remixers</option>
+                <option value="title">Solo Título de Track</option>
+                <option value="key">Camelot Key (ej: 8A)</option>
+              </select>
+              <button onclick="executePlaylistFilter()" id="filterExecuteBtn" class="bg-cyan-500 hover:bg-cyan-400 text-black font-bold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 transition shadow-lg shadow-cyan-500/20 shrink-0">
+                <i class="fa-solid fa-filter"></i> <span>Filtrar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter Results & Sub-Playlist Creation Container -->
+        <div id="filterResultsContainer" class="hidden mt-1 p-4 rounded-2xl bg-neutral-950/80 border border-spotify-border flex flex-col gap-4">
+          <!-- Header: Original Playlist Info & Match Counter -->
+          <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between border-b border-spotify-border/60 pb-3">
+            <div class="flex items-center gap-3">
+              <img id="filterOrigCover" src="" class="w-12 h-12 rounded-lg object-cover bg-neutral-900 border border-spotify-border shrink-0">
+              <div>
+                <h3 id="filterOrigTitle" class="text-sm font-bold text-white leading-tight">Playlist Name</h3>
+                <p id="filterOrigMeta" class="text-xs text-spotify-muted font-mono mt-0.5">
+                  <span id="filterMatchedBadge" class="text-cyan-400 font-bold">0 de 0</span> tracks coinciden con "<span id="filterQueryDisplay" class="text-white"></span>"
+                </p>
+              </div>
+            </div>
+
+            <!-- New Playlist Title Input -->
+            <div class="flex items-center gap-2 w-full sm:w-auto">
+              <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
+                <label for="newPlaylistNameInput" class="text-[11px] font-semibold text-neutral-400 shrink-0">Nombre nueva playlist:</label>
+                <input type="text" id="newPlaylistNameInput" placeholder="Nombre de la nueva playlist..." class="bg-spotify-light border border-spotify-border rounded-lg px-3 py-1.5 text-xs text-white focus:border-cyan-400 outline-none w-full sm:w-64 font-medium">
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons Bar -->
+          <div class="flex flex-wrap items-center justify-between gap-2.5">
+            <div class="flex items-center gap-2 text-xs">
+              <label class="flex items-center gap-1.5 cursor-pointer text-neutral-300 hover:text-white transition">
+                <input type="checkbox" id="selectAllFilterTracks" checked onchange="toggleSelectAllFilterTracks(this.checked)" class="rounded accent-cyan-500">
+                <span class="text-[11px] font-medium">Seleccionar todos (<span id="filterSelectedCount">0</span>)</span>
+              </label>
+            </div>
+
+            <div class="flex items-center flex-wrap gap-2">
+              <button onclick="copyFilteredTrackUris()" class="px-3 py-1.5 rounded-lg bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-xs font-semibold text-neutral-200 transition flex items-center gap-1.5 cursor-pointer">
+                <i class="fa-solid fa-clipboard text-cyan-400"></i> Copiar URIs (Cmd+V)
+              </button>
+              <button onclick="exportFilteredM3u8()" class="px-3 py-1.5 rounded-lg bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-xs font-semibold text-neutral-200 transition flex items-center gap-1.5 cursor-pointer">
+                <i class="fa-solid fa-file-audio text-amber-400"></i> Exportar M3U8
+              </button>
+              <button onclick="queueFilteredToMuzpa()" id="queueMuzpaBtn" class="px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-purple-600/20 cursor-pointer">
+                <i class="fa-solid fa-cloud-arrow-down"></i> Descargar en Muzpa
+              </button>
+              <button onclick="createFilteredPlaylistOnSpotify()" id="createSpotifyPlBtn" class="px-4 py-1.5 rounded-lg bg-spotify hover:bg-spotify-hover text-black text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-spotify/20 cursor-pointer">
+                <i class="fa-brands fa-spotify text-sm"></i> Crear en Spotify
+              </button>
+            </div>
+          </div>
+
+          <!-- Filtered Tracks Table / List -->
+          <div class="max-h-80 overflow-y-auto rounded-xl border border-spotify-border bg-neutral-900/60 p-2 divide-y divide-white/5" id="filterTracksList">
+            <!-- Populated dynamically -->
           </div>
         </div>
       </div>
@@ -1104,24 +1202,33 @@
 
     function switchSourceTab(mode) {
       const spotBtn = document.getElementById("srcTabSpotifyBtn");
+      const filterBtn = document.getElementById("srcTabFilterBtn");
       const folderBtn = document.getElementById("srcTabFolderBtn");
       const djSetBtn = document.getElementById("srcTabDjSetBtn");
       const spotGroup = document.getElementById("srcSpotifyGroup");
+      const filterGroup = document.getElementById("srcFilterGroup");
       const folderGroup = document.getElementById("srcFolderGroup");
       const djSetGroup = document.getElementById("srcDjSetGroup");
 
       // Reset tabs
       spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+      if (filterBtn) filterBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
       folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
       if (djSetBtn) djSetBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
 
       spotGroup.classList.add("hidden");
+      if (filterGroup) filterGroup.classList.add("hidden");
       folderGroup.classList.add("hidden");
       if (djSetGroup) djSetGroup.classList.add("hidden");
 
       if (mode === 'spotify') {
         spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify text-black transition shadow-sm";
         spotGroup.classList.remove("hidden");
+      } else if (mode === 'filter') {
+        if (filterBtn) filterBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-cyan-400 text-black transition shadow-sm";
+        if (filterGroup) filterGroup.classList.remove("hidden");
+        const filterInput = document.getElementById("filterPlaylistInput");
+        if (filterInput) filterInput.focus();
       } else if (mode === 'folder') {
         folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 text-black transition shadow-sm";
         folderGroup.classList.remove("hidden");
@@ -1431,12 +1538,23 @@
     }
 
     let spotifyAuthPollInterval = null;
-    function connectSpotifyAndExport(authUrl) {
+    let spotifyAuthPendingAction = 'djset';
+
+    function connectSpotifyAndExport(authUrl, action = 'djset') {
       if (!authUrl) return;
+      spotifyAuthPendingAction = action;
       const width = 550, height = 750;
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
       const authWin = window.open(authUrl, "spotifyAuth", `width=${width},height=${height},left=${left},top=${top}`);
+
+      const triggerAction = () => {
+        if (spotifyAuthPendingAction === 'filter') {
+          createFilteredPlaylistOnSpotify();
+        } else {
+          exportDjSetToSpotify();
+        }
+      };
 
       if (spotifyAuthPollInterval) clearInterval(spotifyAuthPollInterval);
       spotifyAuthPollInterval = setInterval(async () => {
@@ -1447,7 +1565,7 @@
             clearInterval(spotifyAuthPollInterval);
             spotifyAuthPollInterval = null;
             if (authWin && !authWin.closed) authWin.close();
-            exportDjSetToSpotify();
+            triggerAction();
           }
         } catch (e) {}
       }, 1500);
@@ -1459,7 +1577,7 @@
             clearInterval(spotifyAuthPollInterval);
             spotifyAuthPollInterval = null;
           }
-          exportDjSetToSpotify();
+          triggerAction();
         }
       });
     }
@@ -1483,7 +1601,7 @@
           })
         });
         const data = await res.json();
-        showSpotifyExportModal(data);
+        showSpotifyExportModal(data, 'djset');
       } catch (e) {
         alert("Spotify export error: " + e.message);
       } finally {
@@ -1494,7 +1612,7 @@
       }
     }
 
-    function showSpotifyExportModal(data) {
+    function showSpotifyExportModal(data, action = 'djset') {
       const modal = document.getElementById("spotifyExportModal");
       const content = document.getElementById("spotifyExportContent");
       if (!modal || !content) return;
@@ -1507,7 +1625,7 @@
             </div>
             <h4 class="text-base font-bold text-white mb-1">Playlist Created Successfully!</h4>
             <p class="text-xs text-neutral-400 mb-4 font-mono">
-              "${escapeHtml(data.playlist_name)}" with ${data.matched_tracks} tracks added.
+              "${escapeHtml(data.playlist_name)}" with ${data.tracks_added || data.matched_tracks || 0} tracks added.
             </p>
             <div class="flex flex-col gap-2.5">
               <button onclick="openInSpotify('${data.playlist_uri}', '${escapeAttr(data.playlist_url)}')" class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
@@ -1534,11 +1652,11 @@
             </div>
             
             <p class="text-xs text-neutral-300 mb-4 leading-relaxed">
-              Found <span class="text-emerald-400 font-bold font-mono">${data.matched_tracks}</span> matching tracks on Spotify. You can link your account for 1-click automatic playlist creation, or instantly copy the track URIs to paste into Spotify.
+              Found <span class="text-emerald-400 font-bold font-mono">${data.tracks_added || data.matched_tracks || 0}</span> matching tracks on Spotify. You can link your account for 1-click automatic playlist creation, or instantly copy the track URIs to paste into Spotify.
             </p>
 
             <div class="flex flex-col gap-2.5">
-              <button onclick="connectSpotifyAndExport('${data.auth_url}')" class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
+              <button onclick="connectSpotifyAndExport('${data.auth_url}', '${action}')" class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
                 <i class="fa-solid fa-link"></i> Link Spotify Account & Create Playlist
               </button>
               <div class="flex items-center gap-2 my-1 text-[10px] text-neutral-500 font-mono uppercase justify-center">
@@ -1558,11 +1676,11 @@
           <div class="py-2">
             <h4 class="text-xs font-bold text-white mb-2">Manual Tracklist Export</h4>
             <p class="text-xs text-neutral-300 mb-4 leading-relaxed">
-              Found <span class="text-emerald-400 font-bold font-mono">${data.matched_tracks}</span> matching tracks. Copy the URIs below and press Cmd+V in any Spotify playlist.
+              Found <span class="text-emerald-400 font-bold font-mono">${data.tracks_added || data.matched_tracks || 0}</span> matching tracks. Copy the URIs below and press Cmd+V in any Spotify playlist.
             </p>
             <div class="flex flex-col gap-2.5">
               <button onclick='copyTrackUris(${JSON.stringify(data.track_uris)})' class="w-full py-2.5 px-4 rounded-xl bg-spotify hover:bg-spotify-hover text-black font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-spotify/20 cursor-pointer">
-                <i class="fa-solid fa-clipboard"></i> Copy ${data.matched_tracks} Track URIs (Cmd+V)
+                <i class="fa-solid fa-clipboard"></i> Copy ${data.tracks_added || data.matched_tracks || 0} Track URIs (Cmd+V)
               </button>
             </div>
           </div>
@@ -1681,6 +1799,282 @@
         }
       } catch (e) {
         alert("Error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // Playlist Filter & Sub-Playlist Generator Logic
+    // -----------------------------------------------------------------
+    let activeFilteredTracks = [];
+    let activeFilterMetadata = null;
+
+    async function executePlaylistFilter() {
+      const plInput = document.getElementById("filterPlaylistInput");
+      const qInput = document.getElementById("filterQueryInput");
+      const bySelect = document.getElementById("filterBySelect");
+      const btn = document.getElementById("filterExecuteBtn");
+
+      const playlist_url = plInput ? plInput.value.trim() : "";
+      const query = qInput ? qInput.value.trim() : "";
+      const filter_by = bySelect ? bySelect.value : "all";
+
+      if (!playlist_url) {
+        alert("Por favor ingresá el link de una playlist de Spotify o prompt con el link.");
+        if (plInput) plInput.focus();
+        return;
+      }
+
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Filtrando...</span>`;
+      }
+
+      try {
+        const res = await fetch("/api/playlist/filter", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playlist_url: playlist_url,
+            query: query,
+            filter_by: filter_by
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Error al procesar el filtro.");
+        }
+
+        const data = await res.json();
+        activeFilterMetadata = data;
+        activeFilteredTracks = data.tracks || [];
+
+        renderFilterResults(data);
+      } catch (err) {
+        alert("Error al filtrar playlist: " + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    function renderFilterResults(data) {
+      const container = document.getElementById("filterResultsContainer");
+      if (!container) return;
+
+      container.classList.remove("hidden");
+
+      // Original cover & title
+      const cover = document.getElementById("filterOrigCover");
+      if (cover) {
+        cover.src = data.playlist_image || "https://via.placeholder.com/64x64/222222/888888?text=Playlist";
+      }
+
+      const origTitle = document.getElementById("filterOrigTitle");
+      if (origTitle) origTitle.textContent = data.playlist_name;
+
+      const matchedBadge = document.getElementById("filterMatchedBadge");
+      if (matchedBadge) matchedBadge.textContent = `${data.matched_count} de ${data.total_tracks}`;
+
+      const queryDisplay = document.getElementById("filterQueryDisplay");
+      if (queryDisplay) queryDisplay.textContent = data.query || "Todos los tracks";
+
+      const nameInput = document.getElementById("newPlaylistNameInput");
+      if (nameInput) nameInput.value = data.suggested_title || `Selección — ${data.playlist_name}`;
+
+      const selectAll = document.getElementById("selectAllFilterTracks");
+      if (selectAll) selectAll.checked = true;
+
+      renderFilterTracksList(activeFilteredTracks);
+      updateFilterSelectedCount();
+    }
+
+    function renderFilterTracksList(tracks) {
+      const listEl = document.getElementById("filterTracksList");
+      if (!listEl) return;
+
+      if (!tracks || tracks.length === 0) {
+        listEl.innerHTML = `
+          <div class="text-xs text-neutral-500 text-center py-6 font-mono">
+            No se encontraron canciones que coincidan con el filtro especificado.
+          </div>
+        `;
+        return;
+      }
+
+      listEl.innerHTML = tracks.map((t, idx) => {
+        const coverSrc = t.image_url || "https://via.placeholder.com/40x40/222222/888888?text=♪";
+        return `
+          <div class="flex items-center justify-between gap-3 p-2 hover:bg-white/5 rounded-lg transition text-xs group">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <input type="checkbox" class="filter-track-cb rounded accent-cyan-500 cursor-pointer" data-idx="${idx}" checked onchange="updateFilterSelectedCount()">
+              <span class="font-mono text-neutral-500 text-[11px] w-5 text-right">${idx + 1}</span>
+              <img src="${coverSrc}" class="w-8 h-8 rounded object-cover bg-neutral-800 border border-white/5 shrink-0">
+              <div class="min-w-0 flex-1">
+                <div class="font-bold text-white truncate group-hover:text-cyan-300 transition">${escapeHtml(t.title)}</div>
+                <div class="text-[11px] text-neutral-400 truncate">${escapeHtml(t.artist)}</div>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-3 shrink-0 text-[11px] font-mono">
+              ${t.bpm ? `<span class="bg-amber-950/50 text-amber-300 border border-amber-800/40 px-1.5 py-0.5 rounded text-[10px]">${t.bpm} BPM</span>` : ''}
+              ${t.camelot_key ? `<span class="bg-cyan-950/50 text-cyan-300 border border-cyan-800/40 px-1.5 py-0.5 rounded text-[10px]">${t.camelot_key}</span>` : ''}
+              <span class="text-neutral-400">${t.duration_str || '0:00'}</span>
+              <button onclick="openInSpotify('${t.id}', '${escapeAttr(t.spotify_url || '')}')" title="Escuchar en Spotify" class="text-neutral-500 hover:text-spotify p-1 transition cursor-pointer">
+                <i class="fa-brands fa-spotify text-sm"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function toggleSelectAllFilterTracks(checked) {
+      const cbs = document.querySelectorAll(".filter-track-cb");
+      cbs.forEach(cb => cb.checked = checked);
+      updateFilterSelectedCount();
+    }
+
+    function updateFilterSelectedCount() {
+      const selected = getSelectedFilterTracks();
+      const countEl = document.getElementById("filterSelectedCount");
+      if (countEl) countEl.textContent = selected.length;
+    }
+
+    function getSelectedFilterTracks() {
+      const cbs = document.querySelectorAll(".filter-track-cb:checked");
+      const selected = [];
+      cbs.forEach(cb => {
+        const idx = parseInt(cb.getAttribute("data-idx"));
+        if (activeFilteredTracks[idx]) {
+          selected.push(activeFilteredTracks[idx]);
+        }
+      });
+      return selected;
+    }
+
+    function copyFilteredTrackUris() {
+      const selected = getSelectedFilterTracks();
+      if (!selected.length) {
+        alert("No hay tracks seleccionados.");
+        return;
+      }
+      const uris = selected.map(t => t.id.startsWith("spotify:track:") ? t.id : `spotify:track:${t.id}`);
+      copyTrackUris(uris);
+    }
+
+    function exportFilteredM3u8() {
+      const selected = getSelectedFilterTracks();
+      if (!selected.length) {
+        alert("No hay tracks seleccionados para exportar.");
+        return;
+      }
+      const nameInput = document.getElementById("newPlaylistNameInput");
+      const plName = (nameInput && nameInput.value.trim()) || "Filtered Selection";
+
+      let m3u = `#EXTM3U\n#PLAYLIST:${plName}\n`;
+      selected.forEach(t => {
+        const durSec = Math.floor((t.duration_ms || 0) / 1000);
+        m3u += `#EXTINF:${durSec},${t.artist} - ${t.title}\n`;
+        m3u += (t.spotify_url || `spotify:track:${t.id}`) + "\n";
+      });
+
+      const blob = new Blob([m3u], { type: "audio/x-mpegurl" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${plName.replace(/[^a-zA-Z0-9_\- ]/g, '')}.m3u8`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function createFilteredPlaylistOnSpotify() {
+      const selected = getSelectedFilterTracks();
+      if (!selected.length) {
+        alert("Por favor seleccioná al menos una canción para crear la playlist.");
+        return;
+      }
+
+      const nameInput = document.getElementById("newPlaylistNameInput");
+      const playlistName = (nameInput && nameInput.value.trim()) || "Filtered Playlist";
+
+      const btn = document.getElementById("createSpotifyPlBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Creando...`;
+      }
+
+      try {
+        const uris = selected.map(t => t.id.startsWith("spotify:track:") ? t.id : `spotify:track:${t.id}`);
+        const res = await fetch("/api/playlist/create-filtered", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playlist_name: playlistName,
+            track_uris: uris,
+            description: `Filtrado desde ${activeFilterMetadata ? activeFilterMetadata.playlist_name : 'Spotify'} mediante Spotify2Muzpa Studio`
+          })
+        });
+
+        const data = await res.json();
+        showSpotifyExportModal(data, 'filter');
+      } catch (err) {
+        alert("Error al crear la playlist en Spotify: " + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    async function queueFilteredToMuzpa() {
+      const selected = getSelectedFilterTracks();
+      if (!selected.length) {
+        alert("Por favor seleccioná al menos una canción para descargar.");
+        return;
+      }
+
+      const nameInput = document.getElementById("newPlaylistNameInput");
+      const playlistName = (nameInput && nameInput.value.trim()) || "Filtered Selection";
+
+      const btn = document.getElementById("queueMuzpaBtn");
+      const origHtml = btn ? btn.innerHTML : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Enviando...`;
+      }
+
+      try {
+        const res = await fetch("/api/playlist/queue-filtered-to-muzpa", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playlist_name: playlistName,
+            tracks: selected
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error("No se pudo iniciar la descarga en Muzpa.");
+        }
+
+        const data = await res.json();
+        switchSourceTab('spotify');
+        alert(`✓ Se enviaron ${selected.length} tracks a la cola de Muzpa para descargar en "${playlistName}"!`);
+      } catch (err) {
+        alert("Error al enviar a Muzpa: " + err.message);
       } finally {
         if (btn) {
           btn.disabled = false;

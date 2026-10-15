@@ -37,8 +37,11 @@ from models import (
     DJSetJob,
     DJSetAnalyzeRequest,
     DJSetToPlaylistRequest,
+    PlaylistFilterRequest,
+    CreateFilteredPlaylistRequest,
 )
 from spotify_service import SpotifyService
+from playlist_filter_service import parse_filter_prompt, filter_tracks
 from dj_set_service import DJSetService
 from muzpa_crawler import MuzpaCrawlerEngine, detect_available_browsers
 from downloader import MuzpaDownloader, StateManager, DownloadQueueManager
@@ -541,6 +544,160 @@ async def load_playlist(payload: Dict[str, Any]):
 
     await orchestrator.start_job(job)
     return {"status": "success", "job": job.model_dump(), "reloaded_fresh": force_fresh}
+
+
+@app.post("/api/playlist/filter")
+async def filter_playlist_endpoint(req: PlaylistFilterRequest):
+    """
+    Extracts tracks from Spotify playlist, applies intelligent query & musical filters,
+    and returns matched tracks for sub-playlist creation.
+    Supports natural language prompt input like:
+    'quiero hacer una playlist con todos los tracks de guyj que hay acá https://open.spotify.com/playlist/...'
+    """
+    await verify_access_or_raise()
+
+    # Extract URL and query if combined in prompt
+    extracted_url, extracted_q = parse_filter_prompt(req.playlist_url)
+    target_url = (extracted_url or req.playlist_url).strip()
+    search_query = req.query.strip() or extracted_q.strip()
+
+    # Also handle if the query input itself contains a URL and prompt
+    if not extracted_url and req.query:
+        q_url, q_term = parse_filter_prompt(req.query)
+        if q_url:
+            target_url = q_url
+            if q_term:
+                search_query = q_term
+
+    if not target_url:
+        raise HTTPException(status_code=400, detail="Missing Spotify playlist URL.")
+
+    try:
+        playlist_id = spotify_service.extract_playlist_id(target_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        playlist_name, playlist_img, all_tracks = spotify_service.fetch_playlist(target_url)
+    except Exception as e:
+        logger.error(f"Failed to fetch Spotify playlist: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load playlist: {e}")
+
+    filtered = filter_tracks(
+        tracks=all_tracks,
+        query=search_query,
+        filter_by=req.filter_by,
+        min_score=req.min_score,
+        min_bpm=req.min_bpm,
+        max_bpm=req.max_bpm,
+        camelot_key=req.camelot_key
+    )
+
+    if search_query:
+        suggested_title = f"{search_query.title()} — Selection from {playlist_name}"
+    else:
+        suggested_title = f"Selection from {playlist_name}"
+
+    return {
+        "status": "success",
+        "playlist_id": playlist_id,
+        "playlist_name": playlist_name,
+        "playlist_image": playlist_img,
+        "playlist_url": target_url,
+        "total_tracks": len(all_tracks),
+        "matched_count": len(filtered),
+        "query": search_query,
+        "filter_by": req.filter_by,
+        "suggested_title": suggested_title,
+        "tracks": [t.model_dump() for t in filtered]
+    }
+
+
+@app.post("/api/playlist/create-filtered")
+async def create_filtered_playlist(req: CreateFilteredPlaylistRequest):
+    """
+    Creates a new Spotify playlist on the authenticated user's account containing the filtered tracks,
+    or returns OAuth auth_url and track URIs for 1-click clipboard paste.
+    """
+    await verify_access_or_raise()
+
+    track_uris = [u.strip() for u in req.track_uris if u and u.strip()]
+    if not track_uris:
+        raise HTTPException(status_code=400, detail="No track URIs provided.")
+
+    clean_uris = []
+    for item in track_uris:
+        if item.startswith("spotify:track:"):
+            clean_uris.append(item)
+        elif item.startswith("spotify:"):
+            clean_uris.append(item)
+        else:
+            clean_uris.append(f"spotify:track:{item}")
+
+    p_name = req.playlist_name.strip() or "Filtered Spotify Playlist"
+
+    # If user is authenticated with Spotify OAuth
+    if spotify_service.is_user_authenticated():
+        created_pl = spotify_service.create_user_playlist(
+            name=p_name,
+            description=req.description or "Filtered with Spotify2Muzpa Studio",
+            track_ids_or_uris=clean_uris,
+            public=req.is_public
+        )
+        if created_pl:
+            return {
+                "status": "success",
+                "created": True,
+                "playlist_id": created_pl["playlist_id"],
+                "playlist_url": created_pl["playlist_url"],
+                "playlist_uri": created_pl["playlist_uri"],
+                "tracks_added": created_pl["tracks_added"],
+                "playlist_name": p_name,
+                "track_uris": clean_uris
+            }
+
+    # If not authenticated, provide auth URL and URIs for clipboard Cmd+V
+    auth_url = spotify_service.get_user_auth_url()
+    return {
+        "status": "auth_required" if auth_url else "manual_only",
+        "created": False,
+        "auth_url": auth_url,
+        "playlist_name": p_name,
+        "tracks_added": len(clean_uris),
+        "track_uris": clean_uris
+    }
+
+
+@app.post("/api/playlist/queue-filtered-to-muzpa")
+async def queue_filtered_to_muzpa(payload: Dict[str, Any]):
+    """
+    Converts a selection of Spotify tracks into an active PlaylistJob to download via Muzpa.
+    """
+    await verify_access_or_raise()
+    tracks_data = payload.get("tracks", [])
+    playlist_name = payload.get("playlist_name", "Filtered Selection")
+    auto_mode = payload.get("auto_mode", settings.AUTO_MODE)
+    threshold = payload.get("similarity_threshold", settings.SIMILARITY_THRESHOLD)
+
+    if not tracks_data:
+        raise HTTPException(status_code=400, detail="No tracks provided to queue.")
+
+    spotify_tracks = [SpotifyTrack(**t) for t in tracks_data]
+    track_states = [TrackState(spotify_track=t) for t in spotify_tracks]
+    pl_id = f"filtered_{abs(hash(playlist_name))}_{int(datetime.utcnow().timestamp())}"
+
+    job = PlaylistJob(
+        playlist_id=pl_id,
+        playlist_name=playlist_name,
+        playlist_url=f"custom://filtered/{pl_id}",
+        tracks=track_states,
+        auto_mode=auto_mode,
+        similarity_threshold=threshold
+    )
+
+    await orchestrator.start_job(job)
+    return {"status": "success", "job": job.model_dump()}
+
 
 
 @app.get("/api/state")
