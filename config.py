@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     AUTO_LAUNCH_BROWSER: bool = Field(default=True, description="Automatically launch crawler browser on server startup")
     IS_DESKTOP_APP: bool = Field(default=False, description="Whether running inside native desktop window")
 
+    # Access Control & Remote Kill-Switch
+    ENABLE_ACCESS_CONTROL: bool = Field(default=True, description="Enable remote activation and kill-switch verification")
+    APP_VERSION: str = Field(default="2.0.0", description="Current application version")
+    REMOTE_CONFIG_URL: str = Field(
+        default="https://raw.githubusercontent.com/marcui13/spotify2muzpa/main/access_control.json",
+        description="Remote URL for kill-switch and allowed activation keys"
+    )
+
     def ensure_directories(self) -> None:
         """Ensure that required operational directories exist on disk."""
         self.DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)

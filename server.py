@@ -5,14 +5,20 @@ warnings.filterwarnings("ignore", category=UserWarning)
 import os
 import re
 import json
+import uuid
 import asyncio
 import logging
+import certifi
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+# Configure default CA bundle for macOS
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,10 +33,19 @@ from models import (
     PlaylistJob,
     DecisionRequest,
     ConfigUpdateRequest,
+    DJSetTrackItem,
+    DJSetJob,
+    DJSetAnalyzeRequest,
+    DJSetToPlaylistRequest,
+    PlaylistFilterRequest,
+    CreateFilteredPlaylistRequest,
 )
 from spotify_service import SpotifyService
+from playlist_filter_service import parse_filter_prompt, filter_tracks
+from dj_set_service import DJSetService
 from muzpa_crawler import MuzpaCrawlerEngine, detect_available_browsers
 from downloader import MuzpaDownloader, StateManager, DownloadQueueManager
+from access_service import access_manager, AccessStatus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -268,8 +283,11 @@ class DownloadOrchestrator:
                 # Immediately advance to next track!
                 return
 
-            # Otherwise, wait for user confirmation
-            track_state.status = TrackStatus.WAITING_CONFIRMATION
+            # Otherwise, wait for user confirmation or resolution
+            if candidates:
+                track_state.status = TrackStatus.WAITING_CONFIRMATION
+            else:
+                track_state.status = TrackStatus.NOT_FOUND
             StateManager.save_job(self.current_job)
             await manager.broadcast({"type": "waiting_decision", "track_id": track_id, "data": track_state.model_dump()})
 
@@ -298,11 +316,17 @@ class DownloadOrchestrator:
                 if chosen_candidate:
                     # Non-blocking enqueue!
                     self.download_queue.enqueue_download(self.current_job, track_state, chosen_candidate)
+                    return
                 else:
-                    track_state.status = TrackStatus.ERROR
-                    track_state.error_message = "No valid candidate chosen"
-                # Immediately advance to next track without waiting for file download!
-                return
+                    logger.warning(f"No valid candidate chosen to confirm for '{track.title}'")
+                    if not track_state.candidates:
+                        track_state.status = TrackStatus.NOT_FOUND
+                        track_state.error_message = "No candidates available to confirm. Please re-search or skip."
+                        continue
+                    else:
+                        track_state.status = TrackStatus.ERROR
+                        track_state.error_message = "No valid candidate chosen"
+                        return
             elif action == "retry":
                 track_state.status = TrackStatus.SEARCHING
                 continue
@@ -310,6 +334,7 @@ class DownloadOrchestrator:
 
 orchestrator = DownloadOrchestrator()
 spotify_service = SpotifyService()
+dj_set_service = DJSetService(spotify_service)
 
 
 @asynccontextmanager
@@ -352,6 +377,10 @@ app.add_middleware(
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
+        # Push initial access status to UI
+        access_status = await access_manager.check_access()
+        await websocket.send_json({"type": "access_status", "data": access_status})
+
         if orchestrator.current_job:
             await websocket.send_json({"type": "initial_state", "data": orchestrator.current_job.model_dump()})
         await websocket.send_json({"type": "log_history", "data": log_handler.log_history})
@@ -360,6 +389,49 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
+
+async def verify_access_or_raise():
+    """Verifies that the application is authorized and active, or raises 403."""
+    status = await access_manager.check_access()
+    if not status["is_authorized"] and settings.ENABLE_ACCESS_CONTROL:
+        raise HTTPException(
+            status_code=403,
+            detail=status["message"]
+        )
+    return status
+
+
+@app.get("/api/access/status")
+async def get_access_status(refresh: bool = False):
+    """Returns remote access status, kill-switch state, and activation information."""
+    return await access_manager.check_access(force_refresh=refresh)
+
+
+@app.post("/api/access/activate")
+async def activate_access(payload: Dict[str, Any]):
+    """Validates and activates a user's beta invitation key."""
+    key = payload.get("key", "").strip()
+    success, message = await access_manager.activate_key(key)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    status = await access_manager.check_access(force_refresh=True)
+    await manager.broadcast({"type": "access_updated", "data": status})
+    return {"status": "success", "message": message, "access": status}
+
+
+@app.post("/api/access/deactivate")
+async def deactivate_access():
+    """Deactivates local license."""
+    access_manager.deactivate_key()
+    status = await access_manager.check_access(force_refresh=True)
+    await manager.broadcast({"type": "access_updated", "data": status})
+    return {"status": "success", "access": status}
 
 
 @app.get("/api/browser/list")
@@ -432,6 +504,7 @@ async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
 @app.post("/api/playlist/load")
 async def load_playlist(payload: Dict[str, Any]):
     """Loads tracks from Spotify URL, initializes or restores job (or forces fresh reload if force_fresh=True)."""
+    await verify_access_or_raise()
     url = payload.get("playlist_url")
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'playlist_url' in request.")
@@ -471,6 +544,160 @@ async def load_playlist(payload: Dict[str, Any]):
 
     await orchestrator.start_job(job)
     return {"status": "success", "job": job.model_dump(), "reloaded_fresh": force_fresh}
+
+
+@app.post("/api/playlist/filter")
+async def filter_playlist_endpoint(req: PlaylistFilterRequest):
+    """
+    Extracts tracks from Spotify playlist, applies intelligent query & musical filters,
+    and returns matched tracks for sub-playlist creation.
+    Supports natural language prompt input like:
+    'quiero hacer una playlist con todos los tracks de guyj que hay acá https://open.spotify.com/playlist/...'
+    """
+    await verify_access_or_raise()
+
+    # Extract URL and query if combined in prompt
+    extracted_url, extracted_q = parse_filter_prompt(req.playlist_url)
+    target_url = (extracted_url or req.playlist_url).strip()
+    search_query = req.query.strip() or extracted_q.strip()
+
+    # Also handle if the query input itself contains a URL and prompt
+    if not extracted_url and req.query:
+        q_url, q_term = parse_filter_prompt(req.query)
+        if q_url:
+            target_url = q_url
+            if q_term:
+                search_query = q_term
+
+    if not target_url:
+        raise HTTPException(status_code=400, detail="Missing Spotify playlist URL.")
+
+    try:
+        playlist_id = spotify_service.extract_playlist_id(target_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        playlist_name, playlist_img, all_tracks = spotify_service.fetch_playlist(target_url)
+    except Exception as e:
+        logger.error(f"Failed to fetch Spotify playlist: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load playlist: {e}")
+
+    filtered = filter_tracks(
+        tracks=all_tracks,
+        query=search_query,
+        filter_by=req.filter_by,
+        min_score=req.min_score,
+        min_bpm=req.min_bpm,
+        max_bpm=req.max_bpm,
+        camelot_key=req.camelot_key
+    )
+
+    if search_query:
+        suggested_title = f"{search_query.title()} — Selection from {playlist_name}"
+    else:
+        suggested_title = f"Selection from {playlist_name}"
+
+    return {
+        "status": "success",
+        "playlist_id": playlist_id,
+        "playlist_name": playlist_name,
+        "playlist_image": playlist_img,
+        "playlist_url": target_url,
+        "total_tracks": len(all_tracks),
+        "matched_count": len(filtered),
+        "query": search_query,
+        "filter_by": req.filter_by,
+        "suggested_title": suggested_title,
+        "tracks": [t.model_dump() for t in filtered]
+    }
+
+
+@app.post("/api/playlist/create-filtered")
+async def create_filtered_playlist(req: CreateFilteredPlaylistRequest):
+    """
+    Creates a new Spotify playlist on the authenticated user's account containing the filtered tracks,
+    or returns OAuth auth_url and track URIs for 1-click clipboard paste.
+    """
+    await verify_access_or_raise()
+
+    track_uris = [u.strip() for u in req.track_uris if u and u.strip()]
+    if not track_uris:
+        raise HTTPException(status_code=400, detail="No track URIs provided.")
+
+    clean_uris = []
+    for item in track_uris:
+        if item.startswith("spotify:track:"):
+            clean_uris.append(item)
+        elif item.startswith("spotify:"):
+            clean_uris.append(item)
+        else:
+            clean_uris.append(f"spotify:track:{item}")
+
+    p_name = req.playlist_name.strip() or "Filtered Spotify Playlist"
+
+    # If user is authenticated with Spotify OAuth
+    if spotify_service.is_user_authenticated():
+        created_pl = spotify_service.create_user_playlist(
+            name=p_name,
+            description=req.description or "Filtered with Spotify2Muzpa Studio",
+            track_ids_or_uris=clean_uris,
+            public=req.is_public
+        )
+        if created_pl:
+            return {
+                "status": "success",
+                "created": True,
+                "playlist_id": created_pl["playlist_id"],
+                "playlist_url": created_pl["playlist_url"],
+                "playlist_uri": created_pl["playlist_uri"],
+                "tracks_added": created_pl["tracks_added"],
+                "playlist_name": p_name,
+                "track_uris": clean_uris
+            }
+
+    # If not authenticated, provide auth URL and URIs for clipboard Cmd+V
+    auth_url = spotify_service.get_user_auth_url()
+    return {
+        "status": "auth_required" if auth_url else "manual_only",
+        "created": False,
+        "auth_url": auth_url,
+        "playlist_name": p_name,
+        "tracks_added": len(clean_uris),
+        "track_uris": clean_uris
+    }
+
+
+@app.post("/api/playlist/queue-filtered-to-muzpa")
+async def queue_filtered_to_muzpa(payload: Dict[str, Any]):
+    """
+    Converts a selection of Spotify tracks into an active PlaylistJob to download via Muzpa.
+    """
+    await verify_access_or_raise()
+    tracks_data = payload.get("tracks", [])
+    playlist_name = payload.get("playlist_name", "Filtered Selection")
+    auto_mode = payload.get("auto_mode", settings.AUTO_MODE)
+    threshold = payload.get("similarity_threshold", settings.SIMILARITY_THRESHOLD)
+
+    if not tracks_data:
+        raise HTTPException(status_code=400, detail="No tracks provided to queue.")
+
+    spotify_tracks = [SpotifyTrack(**t) for t in tracks_data]
+    track_states = [TrackState(spotify_track=t) for t in spotify_tracks]
+    pl_id = f"filtered_{abs(hash(playlist_name))}_{int(datetime.utcnow().timestamp())}"
+
+    job = PlaylistJob(
+        playlist_id=pl_id,
+        playlist_name=playlist_name,
+        playlist_url=f"custom://filtered/{pl_id}",
+        tracks=track_states,
+        auto_mode=auto_mode,
+        similarity_threshold=threshold
+    )
+
+    await orchestrator.start_job(job)
+    return {"status": "success", "job": job.model_dump()}
+
 
 
 @app.get("/api/state")
@@ -845,6 +1072,251 @@ async def update_config(req: ConfigUpdateRequest):
         StateManager.save_job(orchestrator.current_job)
         await manager.broadcast({"type": "config_updated", "data": orchestrator.current_job.model_dump()})
     return {"status": "updated"}
+
+
+# -------------------------------------------------------------
+# DJ Set Tracklist Identifier Endpoints
+# -------------------------------------------------------------
+
+@app.post("/api/djset/analyze")
+async def analyze_dj_set(payload: DJSetAnalyzeRequest):
+    """Starts asynchronous DJ set analysis for a YouTube/SoundCloud URL or local set."""
+    await verify_access_or_raise()
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'url' in request.")
+
+    yt_or_sc = bool(re.search(r"(youtube\.com|youtu\.be|soundcloud\.com)", url, re.IGNORECASE))
+    if not yt_or_sc and not os.path.exists(url):
+        raise HTTPException(status_code=400, detail="URL must be a valid YouTube, SoundCloud link or local audio file.")
+
+    main_loop = asyncio.get_running_loop()
+
+    def _sync_progress_dispatch(info: Dict[str, Any]):
+        try:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "djset_progress", "data": info}),
+                main_loop
+            )
+        except Exception as e:
+            logger.debug(f"Progress dispatch error: {e}")
+
+    temp_id = f"djset_{uuid.uuid4().hex[:10]}"
+    initial_job = DJSetJob(job_id=temp_id, source_url=url, status="extracting_info")
+    dj_set_service.active_jobs[temp_id] = initial_job
+
+    # Run analysis in background task
+    async def _run_analysis():
+        try:
+            job = await dj_set_service.analyze_dj_set(
+                url=url,
+                sample_interval=payload.sample_interval,
+                snippet_duration=payload.snippet_duration,
+                force_acoustic=payload.force_acoustic,
+                on_progress_callback=_sync_progress_dispatch,
+                job_id=temp_id
+            )
+            await manager.broadcast({
+                "type": "djset_complete",
+                "data": job.model_dump()
+            })
+        except Exception as ex:
+            logger.error(f"Background DJ set analysis error: {ex}")
+            await manager.broadcast({
+                "type": "djset_error",
+                "data": {"error": str(ex)}
+            })
+
+    asyncio.create_task(_run_analysis())
+    return {"status": "started", "job_id": temp_id, "job": initial_job.model_dump()}
+
+
+@app.get("/api/djset/status/{job_id}")
+async def get_dj_set_status(job_id: str):
+    """Returns the current status and detected tracks of a DJ set analysis job."""
+    job = dj_set_service.active_jobs.get(job_id)
+    if not job:
+        for j in dj_set_service.active_jobs.values():
+            if j.job_id == job_id or j.source_url == job_id:
+                job = j
+                break
+    if not job:
+        if dj_set_service.active_jobs:
+            job = list(dj_set_service.active_jobs.values())[-1]
+        else:
+            raise HTTPException(status_code=404, detail="DJ Set job not found.")
+    return {"status": "success", "job": job.model_dump()}
+
+
+@app.post("/api/djset/cancel/{job_id}")
+async def cancel_dj_set(job_id: str):
+    """Cancels an ongoing DJ set analysis job."""
+    cancelled = dj_set_service.cancel_job(job_id)
+    return {"status": "success", "cancelled": cancelled}
+
+
+@app.post("/api/djset/to-playlist")
+async def dj_set_to_playlist(payload: DJSetToPlaylistRequest):
+    """Converts analyzed DJ set tracklist into an active PlaylistJob and begins Muzpa crawling."""
+    await verify_access_or_raise()
+    try:
+        target_id = payload.job_id
+        if target_id not in dj_set_service.active_jobs and dj_set_service.active_jobs:
+            target_id = list(dj_set_service.active_jobs.keys())[-1]
+
+        playlist_job = dj_set_service.convert_to_playlist_job(
+            job_id=target_id,
+            playlist_name=payload.playlist_name,
+            selected_indices=payload.selected_indices,
+            auto_mode=payload.auto_mode,
+            similarity_threshold=payload.similarity_threshold
+        )
+    except Exception as e:
+        logger.error(f"Failed to convert DJ Set to playlist: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    await orchestrator.start_job(playlist_job)
+    return {"status": "success", "job": playlist_job.model_dump()}
+
+
+@app.get("/api/spotify/auth-url")
+async def get_spotify_auth_url():
+    """Returns the Spotify OAuth authorization URL for user login."""
+    auth_url = spotify_service.get_user_auth_url()
+    if not auth_url:
+        return {"status": "error", "message": "Spotify API credentials (SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET) not configured."}
+    return {
+        "status": "success",
+        "auth_url": auth_url,
+        "is_authenticated": spotify_service.is_user_authenticated()
+    }
+
+
+@app.get("/api/spotify/status")
+async def get_spotify_auth_status():
+    """Checks whether the user has an active Spotify OAuth token."""
+    return {
+        "status": "success",
+        "is_authenticated": spotify_service.is_user_authenticated(),
+        "has_credentials": bool(spotify_service.client_id and spotify_service.client_secret)
+    }
+
+
+@app.get("/api/spotify/callback")
+async def spotify_auth_callback(code: Optional[str] = None, error: Optional[str] = None):
+    """Handles Spotify OAuth authorization redirect callback."""
+    if error:
+        return HTMLResponse(f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Spotify Authorization Error</title></head>
+        <body style="background:#121212;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+            <div style="text-align:center;padding:2rem;background:#1e1e1e;border-radius:12px;border:1px solid #333;max-width:400px;">
+                <h2 style="color:#f43f5e;">Authorization Failed</h2>
+                <p style="color:#aaa;">Error: {error}</p>
+                <button onclick="window.close()" style="background:#333;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;margin-top:1rem;">Close Window</button>
+            </div>
+        </body>
+        </html>
+        """)
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code.")
+
+    success = spotify_service.handle_auth_callback(code)
+    if success:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Spotify Authorization Successful</title></head>
+        <body style="background:#121212;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+            <div style="text-align:center;padding:2rem;background:#1e1e1e;border-radius:12px;border:1px solid #1DB954;max-width:400px;">
+                <h2 style="color:#1DB954;">✓ Connected to Spotify!</h2>
+                <p style="color:#ccc;">Your account is now linked. You can close this window.</p>
+                <script>
+                    try {
+                        if (window.opener) {
+                            window.opener.postMessage({ type: 'spotify_auth_success' }, '*');
+                        }
+                    } catch(e) {}
+                    setTimeout(() => window.close(), 1500);
+                </script>
+            </div>
+        </body>
+        </html>
+        """)
+    else:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Spotify Token Error</title></head>
+        <body style="background:#121212;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+            <div style="text-align:center;padding:2rem;background:#1e1e1e;border-radius:12px;border:1px solid #f43f5e;max-width:400px;">
+                <h2 style="color:#f43f5e;">Failed to verify Spotify authorization.</h2>
+                <button onclick="window.close()" style="background:#333;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;margin-top:1rem;">Close Window</button>
+            </div>
+        </body>
+        </html>
+        """, status_code=400)
+
+
+@app.post("/api/djset/export-spotify")
+async def export_dj_set_to_spotify(payload: Dict[str, Any]):
+    """Creates a playlist in the user's Spotify account or returns track URIs for clipboard Cmd+V."""
+    job_id = payload.get("job_id")
+    target_id = job_id if job_id in dj_set_service.active_jobs else (list(dj_set_service.active_jobs.keys())[-1] if dj_set_service.active_jobs else None)
+    if not target_id:
+        raise HTTPException(status_code=404, detail="No DJ set job found.")
+
+    job = dj_set_service.active_jobs[target_id]
+    matched_ids = [t.spotify_id for t in job.tracks if t.spotify_id]
+    matched_uris = [f"spotify:track:{tid}" for tid in matched_ids]
+
+    # If user is authenticated, create playlist on their account
+    if spotify_service.is_user_authenticated():
+        p_name = payload.get("playlist_name") or f"DJ Set — {job.title}"
+        created_pl = spotify_service.create_user_playlist(
+            name=p_name,
+            description=f"Generated by Spotify2Muzpa Studio from {job.source_url}",
+            track_ids_or_uris=matched_uris
+        )
+        if created_pl:
+            return {
+                "status": "success",
+                "created": True,
+                "playlist_id": created_pl["playlist_id"],
+                "playlist_url": created_pl["playlist_url"],
+                "playlist_uri": created_pl["playlist_uri"],
+                "matched_tracks": len(matched_ids),
+                "total_tracks": len(job.tracks),
+                "track_uris": matched_uris,
+                "playlist_name": p_name
+            }
+
+    # If not authenticated or creation failed, provide auth_url and track_uris for 1-click Cmd+V paste
+    auth_url = spotify_service.get_user_auth_url()
+    return {
+        "status": "auth_required" if auth_url else "manual_only",
+        "created": False,
+        "auth_url": auth_url,
+        "matched_tracks": len(matched_ids),
+        "total_tracks": len(job.tracks),
+        "track_uris": matched_uris,
+        "playlist_name": job.title
+    }
+
+
+@app.post("/api/djset/export-youtube")
+async def export_dj_set_to_youtube(payload: Dict[str, Any]):
+    """Resolves YouTube video IDs and returns multi-track YouTube playlist queue URL."""
+    job_id = payload.get("job_id")
+    target_id = job_id if job_id in dj_set_service.active_jobs else (list(dj_set_service.active_jobs.keys())[-1] if dj_set_service.active_jobs else None)
+    if not target_id:
+        raise HTTPException(status_code=404, detail="No DJ set job found.")
+
+    res = await dj_set_service.resolve_youtube_playlist(target_id)
+    return res
+
 
 
 # Mount static frontend

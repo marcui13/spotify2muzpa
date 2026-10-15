@@ -49,6 +49,9 @@ spotify2muzpa/
 ├── config.py             # Centralized settings (Pydantic BaseSettings & .env loader)
 ├── models.py             # Strongly typed Pydantic models (SpotifyTrack, MuzpaCandidate, TrackState, PlaylistJob)
 ├── spotify_service.py    # Spotify extraction client with official API + Next.js embed fallback parser
+├── playlist_filter_service.py # Prompt parsing, fuzzy track matching, and sub-playlist filter engine
+├── filter_playlist.py    # Standalone CLI for filtering Spotify playlists and creating sub-playlists
+├── dj_set_service.py     # Hybrid YouTube/SoundCloud DJ set tracklist parser & acoustic Shazam analyzer
 ├── muzpa_crawler.py      # Playwright browser automation, multi-tab manager, AngularJS reactive auto-fill
 ├── audio_analyzer.py     # BPM & Camelot Wheel harmonic key analyzer (pitch/mode translation)
 ├── downloader.py         # Asynchronous download queue workers, Mutagen ID3 tagging, state persistence
@@ -60,8 +63,10 @@ spotify2muzpa/
 │   └── index.html        # Reactive Spotify-styled dashboard (Tailwind CSS, glassmorphism, FontAwesome)
 ├── tests/
 │   ├── test_audio_analyzer.py # Tests for Camelot Wheel mapping and DJ attributes
+│   ├── test_dj_set_service.py # Tests for timestamp parsing, chapters, deduplication and 429 retry
 │   ├── test_downloader.py     # Tests for filename sanitization and state persistence
 │   ├── test_fuzzy.py          # Tests for RapidFuzz similarity scoring and penalties
+│   ├── test_playlist_filter.py# Tests for playlist filtering, prompt parsing, and sub-playlist creation
 │   ├── test_server.py         # Tests for FastAPI endpoints and state schemas
 │   └── test_spotify.py        # Tests for Spotify URL/URI parsing and duration formatters
 ├── requirements.txt      # Production and development dependencies
@@ -140,6 +145,11 @@ PYTHONPATH=. .venv/bin/pytest -v tests
 3. **Safe Filenames:** Always run paths through `sanitize_filename()` before writing to disk to prevent path traversal or filesystem errors.
 4. **Non-blocking Event Loop:** Never perform synchronous I/O or long-running HTTP blocking calls in FastAPI route handlers; use asynchronous equivalents (`aiofiles`, `asyncio.Queue`, `async with httpx.AsyncClient`).
 5. **ID3 Tag Integrity:** Preserve existing ID3 frames when writing tags; always handle `HeaderNotFoundError` by initializing ID3 tags safely.
+6. **Acoustic Audio Slicing Format:** `shazamio_core.Recognizer` strictly requires 16kHz mono 16-bit PCM WAV (`-c:a pcm_s16le -ar 16000 -ac 1`). Never pass MP3 slices to the native Rust signature recognizer as sample extraction will yield 0 samples.
+7. **Acoustic Rate Limiting & Pacing:** Use adaptive stepping (jump forward 180s upon track match), client UA rotation, and exponential backoff (`4s * 2^attempt`) on `HTTP 429` to maintain reliable API quotas with Shazam.
+8. **App-First Deep Links with Web Fallback:** Always prioritize launching native desktop applications (`spotify:track:<id>`, `spotify:playlist:<id>`) before web player fallbacks; use window `blur` / visibility state detection with timer fallback.
+9. **Zero-API-Key YouTube Multi-Video Queues:** Leverage YouTube's native `https://www.youtube.com/watch_videos?video_ids=...` endpoint to generate instant playlist queues without demanding Google Cloud developer credentials from the user.
+
 
 ---
 
