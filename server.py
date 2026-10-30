@@ -399,6 +399,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
+    fav = Path(__file__).resolve().parent / "static" / "favicon.ico"
+    if fav.exists():
+        return FileResponse(str(fav), media_type="image/x-icon")
     return Response(status_code=204)
 
 

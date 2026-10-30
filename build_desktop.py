@@ -54,10 +54,25 @@ def build_pyinstaller():
     static_data = f"{BASE_DIR / 'static'}{sep}static"
     env_data = f"{BASE_DIR / '.env.example'}{sep}."
     access_data = f"{BASE_DIR / 'access_control.json'}{sep}."
+    assets_data = f"{BASE_DIR / 'assets'}{sep}assets"
     
     cache_dir = BASE_DIR / ".pyinstaller_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["PYINSTALLER_CONFIG_DIR"] = str(cache_dir)
+
+    icon_ico = BASE_DIR / "assets" / "icon.ico"
+    icon_icns = BASE_DIR / "assets" / "icon.icns"
+    icon_png = BASE_DIR / "assets" / "icon.png"
+
+    icon_args: list[str] = []
+    if os_type == "windows" and icon_ico.exists():
+        icon_args = ["--icon", str(icon_ico)]
+    elif os_type == "darwin" and icon_icns.exists():
+        icon_args = ["--icon", str(icon_icns)]
+    elif icon_ico.exists():
+        icon_args = ["--icon", str(icon_ico)]
+    elif icon_png.exists():
+        icon_args = ["--icon", str(icon_png)]
 
     pyinstaller_cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -66,9 +81,11 @@ def build_pyinstaller():
         "--windowed",
         "--distpath", str(DIST_DIR),
         "--workpath", str(BUILD_DIR),
+        *icon_args,
         "--add-data", static_data,
         "--add-data", env_data,
         "--add-data", access_data,
+        "--add-data", assets_data,
         "--hidden-import", "access_service",
         "--hidden-import", "uvicorn.logging",
         "--hidden-import", "uvicorn.loops",
