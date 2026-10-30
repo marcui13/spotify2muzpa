@@ -52,6 +52,8 @@ spotify2muzpa/
 ├── playlist_filter_service.py # Prompt parsing, fuzzy track matching, and sub-playlist filter engine
 ├── filter_playlist.py    # Standalone CLI for filtering Spotify playlists and creating sub-playlists
 ├── dj_set_service.py     # Hybrid YouTube/SoundCloud DJ set tracklist parser & acoustic Shazam analyzer
+├── tracklist_extractor_service.py # Image OCR (Apple Vision) & copied tracklist normalizer
+├── extract_tracklist.py  # Standalone CLI for image OCR & text tracklist extraction to Muzpa
 ├── muzpa_crawler.py      # Playwright browser automation, multi-tab manager, AngularJS reactive auto-fill
 ├── audio_analyzer.py     # BPM & Camelot Wheel harmonic key analyzer (pitch/mode translation)
 ├── downloader.py         # Asynchronous download queue workers, Mutagen ID3 tagging, state persistence
@@ -68,7 +70,8 @@ spotify2muzpa/
 │   ├── test_fuzzy.py          # Tests for RapidFuzz similarity scoring and penalties
 │   ├── test_playlist_filter.py# Tests for playlist filtering, prompt parsing, and sub-playlist creation
 │   ├── test_server.py         # Tests for FastAPI endpoints and state schemas
-│   └── test_spotify.py        # Tests for Spotify URL/URI parsing and duration formatters
+│   ├── test_spotify.py        # Tests for Spotify URL/URI parsing and duration formatters
+│   └── test_tracklist_extractor.py # Tests for Apple Vision OCR, trackline delimiters, and endpoints
 ├── requirements.txt      # Production and development dependencies
 ├── README.md             # Public documentation, setup instructions, and library catalog
 ├── TERMS_AND_PRIVACY.md  # Legal terms of service, privacy policy, and disclaimers

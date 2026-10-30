@@ -293,3 +293,38 @@ class CreateFilteredPlaylistRequest(BaseModel):
     is_public: bool = Field(default=True, description="Whether the created playlist is public")
     download_to_muzpa: bool = Field(default=False, description="Optionally also enqueue to Muzpa crawler for download")
 
+
+class ExtractedTrackItem(BaseModel):
+    index: int = Field(default=1, description="Track order index")
+    artist: str = Field(description="Artist name")
+    title: str = Field(description="Track title")
+    raw_line: Optional[str] = Field(default=None, description="Original unparsed line or OCR text")
+    spotify_id: Optional[str] = Field(default=None, description="Matched Spotify Track ID")
+    spotify_url: Optional[str] = Field(default=None, description="Spotify Track URL")
+    image_url: Optional[str] = Field(default=None, description="Album artwork URL")
+    duration_ms: int = Field(default=0, description="Duration in ms")
+    duration_str: str = Field(default="0:00", description="Formatted duration MM:SS")
+    bpm: Optional[int] = Field(default=None, description="Tempo in BPM")
+    musical_key: Optional[str] = Field(default=None, description="Musical key e.g. A Minor")
+    camelot_key: Optional[str] = Field(default=None, description="Camelot key e.g. 8A, 11B")
+
+
+class ExtractTextRequest(BaseModel):
+    text: str = Field(description="Raw tracklist text (copied list, description, or notes)")
+
+
+class ExtractImageRequest(BaseModel):
+    image_base64: Optional[str] = Field(default=None, description="Base64 encoded image data or data URI")
+    image_path: Optional[str] = Field(default=None, description="Local absolute path to image file")
+
+
+class QueueExtractedRequest(BaseModel):
+    tracks: List[ExtractedTrackItem] = Field(description="List of extracted tracks to download")
+    playlist_name: Optional[str] = Field(default="Extracted Tracklist", description="Name for the download job/folder")
+    auto_mode: bool = Field(default=False, description="Auto-download matches above threshold")
+    similarity_threshold: float = Field(default=75.0, description="Fuzzy match threshold")
+
+
+class EnrichExtractedRequest(BaseModel):
+    tracks: List[ExtractedTrackItem] = Field(description="List of extracted tracks to enrich via Spotify")
+

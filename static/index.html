@@ -145,6 +145,9 @@
         <button id="srcTabDjSetBtn" onclick="switchSourceTab('djset')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
           <i class="fa-solid fa-compact-disc text-emerald-400 text-sm" aria-hidden="true"></i> <span>DJ Set Link (YouTube / SoundCloud)</span>
         </button>
+        <button id="srcTabExtractBtn" onclick="switchSourceTab('extract')" class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm">
+          <i class="fa-solid fa-wand-magic-sparkles text-fuchsia-400 text-sm" aria-hidden="true"></i> <span>Extraer Imagen / Lista Copiada</span>
+        </button>
       </div>
 
       <!-- Spotify Playlist Input Group -->
@@ -369,6 +372,143 @@
             <div class="max-h-72 overflow-y-auto rounded-xl border border-spotify-border bg-neutral-900/60 p-2 divide-y divide-white/5" id="djSetTracksList">
               <!-- Rendered dynamically -->
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Image OCR & Copied Tracklist Group -->
+      <div id="srcExtractGroup" class="hidden flex flex-col gap-4 relative z-10">
+        <div class="flex items-center justify-between mb-1">
+          <label class="block text-xs font-bold text-fuchsia-400 uppercase tracking-wider flex items-center gap-1.5">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Extraer Tracks de Imagen (OCR) o Lista Copiada
+          </label>
+          <span class="text-[11px] text-spotify-muted font-mono hidden sm:inline">Apple Vision OCR nativo + Detección inteligente de artistas y títulos</span>
+        </div>
+
+        <!-- Mode sub-selector: Imagen vs Lista de Texto -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <!-- Option A: Image OCR (Upload / Drag & Drop / Clipboard Cmd+V) -->
+          <div class="bg-neutral-900/70 border border-spotify-border/80 rounded-2xl p-4 flex flex-col justify-between gap-3 relative group hover:border-fuchsia-500/40 transition">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
+                  <i class="fa-solid fa-image text-fuchsia-400"></i> Opción 1: Imagen o Screenshot
+                </span>
+                <span class="text-[10px] text-neutral-400 font-mono">PNG, JPG, WEBP o Cmd+V</span>
+              </div>
+              
+              <!-- Dropzone -->
+              <div id="imageDropzone" onclick="document.getElementById('imageFileInput').click()"
+                   class="border-2 border-dashed border-neutral-700 hover:border-fuchsia-500/60 rounded-xl p-5 text-center cursor-pointer transition bg-neutral-950/40 hover:bg-fuchsia-500/5 flex flex-col items-center justify-center min-h-[140px] relative">
+                <input type="file" id="imageFileInput" accept="image/*" class="hidden" onchange="handleImageFileSelected(this.files)">
+                
+                <div id="dropzoneEmptyState" class="flex flex-col items-center gap-2">
+                  <div class="w-10 h-10 rounded-full bg-fuchsia-500/10 flex items-center justify-center text-fuchsia-400">
+                    <i class="fa-solid fa-cloud-arrow-up text-lg"></i>
+                  </div>
+                  <p class="text-xs font-medium text-neutral-300">
+                    Arrastrá una imagen acá o <span class="text-fuchsia-400 underline">buscá un archivo</span>
+                  </p>
+                  <p class="text-[10px] text-neutral-500">
+                    También podés hacer click acá y apretar <kbd class="px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300 border border-neutral-700">Cmd+V</kbd> para pegar captura
+                  </p>
+                </div>
+
+                <!-- Preview state (hidden initially) -->
+                <div id="dropzonePreviewState" class="hidden flex items-center gap-3 w-full">
+                  <img id="imagePreviewImg" src="" class="w-16 h-16 object-cover rounded-lg border border-spotify-border shadow-md bg-black shrink-0">
+                  <div class="text-left flex-1 min-w-0">
+                    <p id="imagePreviewName" class="text-xs font-bold text-white truncate">captura.png</p>
+                    <p id="imagePreviewSize" class="text-[10px] text-neutral-400 mt-0.5">0 KB</p>
+                    <button type="button" onclick="clearSelectedImage(event)" class="text-[11px] text-red-400 hover:text-red-300 mt-1 inline-flex items-center gap-1 cursor-pointer">
+                      <i class="fa-solid fa-trash-can text-[10px]"></i> Cambiar imagen
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button onclick="extractFromImage()" id="extractImageBtn" class="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-fuchsia-600/20 cursor-pointer">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> <span>Extraer Tracks con OCR</span>
+            </button>
+          </div>
+
+          <!-- Option B: Copied Tracklist Textarea -->
+          <div class="bg-neutral-900/70 border border-spotify-border/80 rounded-2xl p-4 flex flex-col justify-between gap-3 relative group hover:border-cyan-500/40 transition">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
+                  <i class="fa-solid fa-list-ol text-cyan-400"></i> Opción 2: Pegar Lista de Texto
+                </span>
+                <button type="button" onclick="pasteFromClipboard()" class="text-[10px] text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1 cursor-pointer">
+                  <i class="fa-solid fa-paste"></i> Pegar del portapapeles
+                </button>
+              </div>
+
+              <textarea id="tracklistTextInput" rows="5" placeholder="1 - JUAN DEMINICIS & CASNIK - PHASEBREAKER&#10;2 - EMPHI - ANTHOZOA&#10;3 - TATO SECO - CARAXES&#10;4 - MAZE 28 - LIGHTS ON&#10;..."
+                        class="w-full bg-neutral-950/60 border border-spotify-border rounded-xl p-3 text-xs text-neutral-200 font-mono placeholder-neutral-600 focus:border-cyan-400 transition shadow-inner resize-none outline-none leading-relaxed"></textarea>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <button onclick="loadSampleTracklist()" type="button" class="px-3 py-2.5 rounded-xl border border-spotify-border text-neutral-400 hover:text-white text-xs font-semibold transition shrink-0 cursor-pointer" title="Cargar ejemplo de prueba">
+                Ejemplo
+              </button>
+              <button onclick="extractFromText()" id="extractTextBtn" class="flex-1 bg-cyan-500 hover:bg-cyan-400 text-black font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-cyan-500/20 cursor-pointer">
+                <i class="fa-solid fa-bolt"></i> <span>Parsear Lista Copiada</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Extraction Results & Interactive Review Container (Hidden until tracks extracted) -->
+        <div id="extractResultsContainer" class="hidden mt-2 p-4 rounded-2xl bg-neutral-950/90 border border-fuchsia-500/30 flex flex-col gap-4 shadow-2xl">
+          <!-- Header and Actions -->
+          <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between border-b border-spotify-border/60 pb-3">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-fuchsia-400 animate-pulse"></span>
+              <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                Tracks Reconocidos (<span id="extractCount" class="text-fuchsia-400 font-mono font-bold">0</span>)
+              </h3>
+              <span class="text-[11px] text-spotify-muted hidden md:inline">• Editá artista o título antes de enviar a Muzpa</span>
+            </div>
+
+            <div class="flex items-center flex-wrap gap-2 w-full sm:w-auto justify-end">
+              <button onclick="copyExtractedText()" class="px-3 py-1.5 rounded-lg bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-xs font-semibold text-neutral-200 transition flex items-center gap-1.5 cursor-pointer">
+                <i class="fa-solid fa-copy text-neutral-400"></i> Copiar Texto
+              </button>
+              <button onclick="exportExtractedM3u8()" class="px-3 py-1.5 rounded-lg bg-spotify-light hover:bg-spotify-card-hover border border-spotify-border text-xs font-semibold text-neutral-200 transition flex items-center gap-1.5 cursor-pointer">
+                <i class="fa-solid fa-file-audio text-amber-400"></i> M3U8
+              </button>
+              <button onclick="enrichExtractedWithSpotify()" id="enrichSpotifyBtn" class="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer" title="Buscar carátulas, duración y key/BPM en Spotify">
+                <i class="fa-brands fa-spotify text-cyan-400"></i> Enriquecer Spotify
+              </button>
+              <button onclick="queueExtractedToMuzpa()" id="queueExtractedMuzpaBtn" class="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-lg shadow-purple-600/30 cursor-pointer">
+                <i class="fa-solid fa-cloud-arrow-down"></i> Descargar en Muzpa
+              </button>
+            </div>
+          </div>
+
+          <!-- Playlist Name and Selection Controls -->
+          <div class="flex flex-wrap items-center justify-between gap-3 bg-neutral-900/60 p-2.5 rounded-xl border border-spotify-border">
+            <div class="flex items-center gap-2 flex-1 min-w-[200px]">
+              <label for="extractPlaylistNameInput" class="text-xs font-bold text-neutral-400 shrink-0">Nombre de lista:</label>
+              <input type="text" id="extractPlaylistNameInput" value="Extracted Tracklist"
+                     class="bg-neutral-950 border border-spotify-border rounded-lg px-3 py-1 text-xs text-white focus:border-fuchsia-400 transition outline-none flex-1 font-semibold">
+            </div>
+            <div class="flex items-center gap-3 text-xs">
+              <label class="flex items-center gap-1.5 cursor-pointer text-neutral-300 hover:text-white transition">
+                <input type="checkbox" id="selectAllExtractTracks" checked onchange="toggleSelectAllExtractTracks(this.checked)" class="rounded accent-fuchsia-500">
+                <span class="text-[11px] font-medium">Seleccionar todos (<span id="extractSelectedCount">0</span>)</span>
+              </label>
+              <button onclick="addNewExtractTrackRow()" class="text-[11px] text-fuchsia-400 hover:text-fuchsia-300 font-semibold flex items-center gap-1 px-2 py-0.5 rounded border border-fuchsia-500/30 hover:bg-fuchsia-500/10 transition cursor-pointer">
+                <i class="fa-solid fa-plus"></i> Agregar track
+              </button>
+            </div>
+          </div>
+
+          <!-- Editable Tracks Table List -->
+          <div class="max-h-80 overflow-y-auto rounded-xl border border-spotify-border bg-neutral-900/60 p-2 divide-y divide-white/5" id="extractTracksList">
+            <!-- Dynamically populated rows -->
           </div>
         </div>
       </div>
@@ -750,6 +890,7 @@
       fetchState();
       checkMuzpaCredentials();
       setupKeyboardShortcuts();
+      setupImageDropzone();
     });
 
     function setupKeyboardShortcuts() {
@@ -1199,27 +1340,33 @@
 
     // Source Mode Tab Switching
     let activeDjSetJob = null;
+    let activeExtractedTracks = [];
+    let activeImageBase64 = null;
 
     function switchSourceTab(mode) {
       const spotBtn = document.getElementById("srcTabSpotifyBtn");
       const filterBtn = document.getElementById("srcTabFilterBtn");
       const folderBtn = document.getElementById("srcTabFolderBtn");
       const djSetBtn = document.getElementById("srcTabDjSetBtn");
+      const extractBtn = document.getElementById("srcTabExtractBtn");
       const spotGroup = document.getElementById("srcSpotifyGroup");
       const filterGroup = document.getElementById("srcFilterGroup");
       const folderGroup = document.getElementById("srcFolderGroup");
       const djSetGroup = document.getElementById("srcDjSetGroup");
+      const extractGroup = document.getElementById("srcExtractGroup");
 
       // Reset tabs
       spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
       if (filterBtn) filterBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
       folderBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
       if (djSetBtn) djSetBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
+      if (extractBtn) extractBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify-light text-neutral-400 hover:text-white border border-spotify-border transition shadow-sm";
 
       spotGroup.classList.add("hidden");
       if (filterGroup) filterGroup.classList.add("hidden");
       folderGroup.classList.add("hidden");
       if (djSetGroup) djSetGroup.classList.add("hidden");
+      if (extractGroup) extractGroup.classList.add("hidden");
 
       if (mode === 'spotify') {
         spotBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-spotify text-black transition shadow-sm";
@@ -1239,7 +1386,365 @@
         if (djSetGroup) djSetGroup.classList.remove("hidden");
         const djSetInput = document.getElementById("djSetInput");
         if (djSetInput) djSetInput.focus();
+      } else if (mode === 'extract') {
+        if (extractBtn) extractBtn.className = "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-fuchsia-500 text-black transition shadow-sm";
+        if (extractGroup) extractGroup.classList.remove("hidden");
       }
+    }
+
+    // -------------------------------------------------------------
+    // Image OCR & Copied Tracklist Handlers
+    // -------------------------------------------------------------
+    function handleImageFileSelected(files) {
+      if (!files || !files.length) return;
+      const file = files[0];
+      if (!file.type.startsWith("image/")) {
+        alert("Por favor seleccioná un archivo de imagen válido (PNG, JPG, WEBP).");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        activeImageBase64 = e.target.result;
+        document.getElementById("dropzoneEmptyState").classList.add("hidden");
+        document.getElementById("dropzonePreviewState").classList.remove("hidden");
+        document.getElementById("imagePreviewImg").src = activeImageBase64;
+        document.getElementById("imagePreviewName").innerText = file.name;
+        document.getElementById("imagePreviewSize").innerText = (file.size / 1024).toFixed(1) + " KB";
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function clearSelectedImage(e) {
+      if (e) e.stopPropagation();
+      activeImageBase64 = null;
+      const fileInput = document.getElementById("imageFileInput");
+      if (fileInput) fileInput.value = "";
+      document.getElementById("dropzoneEmptyState").classList.remove("hidden");
+      document.getElementById("dropzonePreviewState").classList.add("hidden");
+      document.getElementById("imagePreviewImg").src = "";
+    }
+
+    function setupImageDropzone() {
+      const dropzone = document.getElementById("imageDropzone");
+      if (!dropzone) return;
+      ["dragenter", "dragover"].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzone.classList.add("border-fuchsia-400", "bg-fuchsia-500/10");
+        }, false);
+      });
+      ["dragleave", "drop"].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzone.classList.remove("border-fuchsia-400", "bg-fuchsia-500/10");
+        }, false);
+      });
+      dropzone.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        if (dt && dt.files && dt.files.length) {
+          handleImageFileSelected(dt.files);
+        }
+      }, false);
+
+      // Support pasting image via Cmd+V
+      window.addEventListener("paste", (e) => {
+        const extractGroup = document.getElementById("srcExtractGroup");
+        if (!extractGroup || extractGroup.classList.contains("hidden")) return;
+        const items = (e.clipboardData || window.clipboardData)?.items;
+        if (!items) return;
+        for (const item of items) {
+          if (item.kind === "file" && item.type.startsWith("image/")) {
+            const file = item.getAsFile();
+            if (file) handleImageFileSelected([file]);
+            e.preventDefault();
+            break;
+          }
+        }
+      });
+    }
+
+    async function pasteFromClipboard() {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          document.getElementById("tracklistTextInput").value = text;
+        }
+      } catch (err) {
+        alert("No se pudo leer automáticamente del portapapeles. Podés pegar con Cmd+V.");
+      }
+    }
+
+    function loadSampleTracklist() {
+      const sample = `1 - JUAN DEMINICIS & CASNIK - PHASEBREAKER\n2 - EMPHI - ANTHOZOA\n3 - TATO SECO - CARAXES\n4 - MAZE 28 - LIGHTS ON\n5 - MAZE 28 & RICKY RYAN - 5AM AGAIN\n6 - BERNI TURLETTI, FJL - EMERALD\n7 - LUCIANO FICARRA - GONE\n8 - LEO CONOVALOFF - BLAZING SWAMP\n9 - KAMILO SANCLEMENTE - CANON\n10 - KALIMA, GONZALO SACC - TURN ME`;
+      document.getElementById("tracklistTextInput").value = sample;
+    }
+
+    async function extractFromImage() {
+      if (!activeImageBase64) {
+        alert("Por favor seleccioná o arrastrá una imagen primero.");
+        return;
+      }
+      const btn = document.getElementById("extractImageBtn");
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reconociendo con Apple Vision OCR...`;
+
+      try {
+        const res = await fetch("/api/extract/image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_base64: activeImageBase64 })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Error en extracción");
+        }
+        const data = await res.json();
+        activeExtractedTracks = data.tracks.map(t => ({ ...t, selected: true }));
+        renderExtractedTracks();
+      } catch (err) {
+        alert("Error al extraer tracks de la imagen: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    async function extractFromText() {
+      const text = document.getElementById("tracklistTextInput").value.trim();
+      if (!text) {
+        alert("Por favor pegá una lista de texto con canciones.");
+        return;
+      }
+      const btn = document.getElementById("extractTextBtn");
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Parseando lista...`;
+
+      try {
+        const res = await fetch("/api/extract/parse-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Error al parsear");
+        }
+        const data = await res.json();
+        activeExtractedTracks = data.tracks.map(t => ({ ...t, selected: true }));
+        renderExtractedTracks();
+      } catch (err) {
+        alert("Error al parsear la lista: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    function renderExtractedTracks() {
+      const container = document.getElementById("extractResultsContainer");
+      const listEl = document.getElementById("extractTracksList");
+      const countEl = document.getElementById("extractCount");
+      const selCountEl = document.getElementById("extractSelectedCount");
+
+      if (!activeExtractedTracks.length) {
+        container.classList.add("hidden");
+        return;
+      }
+
+      container.classList.remove("hidden");
+      countEl.innerText = activeExtractedTracks.length;
+      const selectedCount = activeExtractedTracks.filter(t => t.selected).length;
+      selCountEl.innerText = selectedCount;
+
+      listEl.innerHTML = activeExtractedTracks.map((t, idx) => `
+        <div class="flex items-center gap-3 py-2 px-2 hover:bg-white/5 rounded-lg transition group">
+          <input type="checkbox" ${t.selected ? "checked" : ""} onchange="updateExtractTrackSelection(${idx}, this.checked)" class="rounded accent-fuchsia-500 cursor-pointer">
+          <span class="text-xs font-mono text-neutral-500 w-6 text-center">${idx + 1}</span>
+          ${t.image_url ? `<img src="${t.image_url}" class="w-8 h-8 rounded object-cover bg-neutral-900 border border-spotify-border shrink-0">` : `<div class="w-8 h-8 rounded bg-neutral-800 flex items-center justify-center text-neutral-500 text-xs shrink-0"><i class="fa-solid fa-music"></i></div>`}
+          <div class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2 min-w-0">
+            <input type="text" value="${(t.artist || '').replace(/"/g, '&quot;')}" onchange="updateExtractTrackArtist(${idx}, this.value)" placeholder="Artista"
+                   class="bg-neutral-900/80 border border-neutral-700/80 rounded px-2.5 py-1 text-xs text-white focus:border-fuchsia-400 outline-none truncate font-medium">
+            <input type="text" value="${(t.title || '').replace(/"/g, '&quot;')}" onchange="updateExtractTrackTitle(${idx}, this.value)" placeholder="Título"
+                   class="bg-neutral-900/80 border border-neutral-700/80 rounded px-2.5 py-1 text-xs text-neutral-200 focus:border-fuchsia-400 outline-none truncate">
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            ${t.bpm ? `<span class="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-mono">${t.bpm} BPM</span>` : ""}
+            ${t.camelot_key ? `<span class="text-[10px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded font-mono font-bold">${t.camelot_key}</span>` : ""}
+            ${t.spotify_url ? `<a href="${t.spotify_url}" target="_blank" title="Ver en Spotify" class="text-emerald-400 hover:text-emerald-300 text-xs p-1"><i class="fa-brands fa-spotify"></i></a>` : ""}
+            <button onclick="removeExtractTrack(${idx})" title="Quitar track" class="text-neutral-500 hover:text-red-400 p-1 text-xs transition cursor-pointer">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function updateExtractTrackSelection(idx, checked) {
+      if (activeExtractedTracks[idx]) {
+        activeExtractedTracks[idx].selected = checked;
+        document.getElementById("extractSelectedCount").innerText = activeExtractedTracks.filter(t => t.selected).length;
+      }
+    }
+
+    function toggleSelectAllExtractTracks(checked) {
+      activeExtractedTracks.forEach(t => t.selected = checked);
+      renderExtractedTracks();
+    }
+
+    function updateExtractTrackArtist(idx, val) {
+      if (activeExtractedTracks[idx]) {
+        activeExtractedTracks[idx].artist = val.trim();
+      }
+    }
+
+    function updateExtractTrackTitle(idx, val) {
+      if (activeExtractedTracks[idx]) {
+        activeExtractedTracks[idx].title = val.trim();
+      }
+    }
+
+    function removeExtractTrack(idx) {
+      activeExtractedTracks.splice(idx, 1);
+      renderExtractedTracks();
+    }
+
+    function addNewExtractTrackRow() {
+      activeExtractedTracks.push({
+        index: activeExtractedTracks.length + 1,
+        artist: "",
+        title: "",
+        selected: true,
+        duration_str: "0:00"
+      });
+      renderExtractedTracks();
+    }
+
+    async function enrichExtractedWithSpotify() {
+      if (!activeExtractedTracks.length) return;
+      const btn = document.getElementById("enrichSpotifyBtn");
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buscando...`;
+
+      try {
+        const res = await fetch("/api/extract/enrich-spotify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tracks: activeExtractedTracks })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Error en enriquecimiento");
+        }
+        const data = await res.json();
+        data.tracks.forEach((enriched, idx) => {
+          if (activeExtractedTracks[idx]) {
+            const sel = activeExtractedTracks[idx].selected;
+            activeExtractedTracks[idx] = { ...enriched, selected: sel };
+          }
+        });
+        renderExtractedTracks();
+      } catch (err) {
+        alert("No se pudo enriquecer con Spotify: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    async function queueExtractedToMuzpa() {
+      const selected = activeExtractedTracks.filter(t => t.selected && (t.artist || t.title));
+      if (!selected.length) {
+        alert("Por favor seleccioná al menos una canción para descargar.");
+        return;
+      }
+
+      const nameInput = document.getElementById("extractPlaylistNameInput");
+      const playlistName = (nameInput && nameInput.value.trim()) || "Extracted Tracklist";
+      const autoMode = document.getElementById("autoModeToggle") ? document.getElementById("autoModeToggle").checked : false;
+      const threshold = parseFloat(document.getElementById("thresholdSlider") ? document.getElementById("thresholdSlider").value : 75);
+
+      const btn = document.getElementById("queueExtractedMuzpaBtn");
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Enviando a Muzpa...`;
+
+      try {
+        const res = await fetch("/api/extract/queue-to-muzpa", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tracks: selected,
+            playlist_name: playlistName,
+            auto_mode: autoMode,
+            similarity_threshold: threshold
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Error en el servidor");
+        }
+
+        const data = await res.json();
+        // Update playlist banner & state
+        document.getElementById("playlistBanner").classList.remove("hidden");
+        document.getElementById("playlistTitle").innerText = data.job.playlist_name;
+        document.getElementById("playlistMeta").innerText = `${data.job.tracks.length} tracks`;
+        document.getElementById("savePathDisplay").innerHTML = `~/Downloads/<span id="folderName">${data.job.playlist_name}</span>`;
+
+        switchSourceTab("spotify");
+        const queueSec = document.getElementById("trackReviewSection");
+        if (queueSec) queueSec.scrollIntoView({ behavior: "smooth" });
+
+      } catch (err) {
+        alert("Error al enviar tracks a Muzpa: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    function copyExtractedText() {
+      const selected = activeExtractedTracks.filter(t => t.selected && (t.artist || t.title));
+      if (!selected.length) {
+        alert("No hay tracks seleccionados para copiar.");
+        return;
+      }
+      const lines = selected.map((t, idx) => `${idx + 1} - ${t.artist} - ${t.title}`);
+      navigator.clipboard.writeText(lines.join("\n")).then(() => {
+        alert(`${selected.length} tracks copiados al portapapeles!`);
+      });
+    }
+
+    function exportExtractedM3u8() {
+      const selected = activeExtractedTracks.filter(t => t.selected && (t.artist || t.title));
+      if (!selected.length) {
+        alert("No hay tracks seleccionados para exportar.");
+        return;
+      }
+      const nameInput = document.getElementById("extractPlaylistNameInput");
+      const playlistName = (nameInput && nameInput.value.trim()) || "Extracted Tracklist";
+
+      let m3u = "#EXTM3U\n";
+      selected.forEach(t => {
+        const sec = t.duration_ms ? Math.floor(t.duration_ms / 1000) : -1;
+        m3u += `#EXTINF:${sec},${t.artist} - ${t.title}\n${t.artist} - ${t.title}.mp3\n`;
+      });
+
+      const blob = new Blob([m3u], { type: "audio/x-mpegurl;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${playlistName.replace(/[^a-zA-Z0-9_-]/g, "_")}.m3u8`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
 
     async function startDjSetAnalysis() {

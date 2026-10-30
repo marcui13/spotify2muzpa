@@ -204,6 +204,8 @@ def main():
     parser = argparse.ArgumentParser(description="Spotify to Muzpa Downloader Studio")
     parser.add_argument("--server", action="store_true", help="Launch web dashboard server")
     parser.add_argument("--playlist-url", type=str, help="Spotify playlist URL or URI")
+    parser.add_argument("--image", type=str, help="Image file to extract tracks from via OCR")
+    parser.add_argument("--tracklist", type=str, help="Text file with copied tracklist")
     parser.add_argument("--filter-playlist", type=str, help="Spotify playlist URL or natural prompt to filter and create sub-playlist")
     parser.add_argument("--query", "-q", type=str, default="", help="Query or artist name for playlist filtering")
     parser.add_argument("--auto", action="store_true", help="Enable 100% automatic download mode")
@@ -214,6 +216,25 @@ def main():
     parser.add_argument("--port", type=int, default=settings.PORT, help="Web server port")
 
     args = parser.parse_args()
+
+    # If extracting from image or text tracklist, run extractor CLI directly
+    if args.image or args.tracklist:
+        from extract_tracklist import run_extractor_cli
+        sys.argv = [sys.argv[0]]
+        if args.image:
+            sys.argv.extend(["--image", args.image])
+        if args.tracklist:
+            sys.argv.extend(["--text", args.tracklist])
+        if args.auto:
+            sys.argv.append("--auto")
+        if args.threshold != 75.0:
+            sys.argv.extend(["--threshold", str(args.threshold)])
+        if args.headless:
+            sys.argv.append("--headless")
+        if args.browser:
+            sys.argv.extend(["--browser", args.browser])
+        run_extractor_cli()
+        return
 
     # If filtering playlist, run filter CLI directly
     if args.filter_playlist:

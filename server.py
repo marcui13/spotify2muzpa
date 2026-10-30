@@ -39,9 +39,15 @@ from models import (
     DJSetToPlaylistRequest,
     PlaylistFilterRequest,
     CreateFilteredPlaylistRequest,
+    ExtractedTrackItem,
+    ExtractTextRequest,
+    ExtractImageRequest,
+    QueueExtractedRequest,
+    EnrichExtractedRequest,
 )
 from spotify_service import SpotifyService
 from playlist_filter_service import parse_filter_prompt, filter_tracks
+import tracklist_extractor_service
 from dj_set_service import DJSetService
 from muzpa_crawler import MuzpaCrawlerEngine, detect_available_browsers
 from downloader import MuzpaDownloader, StateManager, DownloadQueueManager
@@ -697,6 +703,96 @@ async def queue_filtered_to_muzpa(payload: Dict[str, Any]):
 
     await orchestrator.start_job(job)
     return {"status": "success", "job": job.model_dump()}
+
+
+@app.post("/api/extract/image")
+async def extract_image_endpoint(req: ExtractImageRequest):
+    """
+    Extracts text from an uploaded image (base64 or local file path) via Apple Vision OCR,
+    parses candidate tracks, and returns them for user review.
+    """
+    await verify_access_or_raise()
+    if not req.image_base64 and not req.image_path:
+        raise HTTPException(status_code=400, detail="Missing 'image_base64' or 'image_path' in request.")
+
+    try:
+        raw_text = tracklist_extractor_service.extract_text_from_image(
+            image_path=req.image_path,
+            base64_data=req.image_base64
+        )
+        tracks = tracklist_extractor_service.parse_tracklist_lines(raw_text)
+        return {
+            "status": "success",
+            "raw_text": raw_text,
+            "tracks": [t.model_dump() for t in tracks]
+        }
+    except Exception as e:
+        logger.error(f"Image text extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Image extraction failed: {e}")
+
+
+@app.post("/api/extract/parse-text")
+async def extract_text_endpoint(req: ExtractTextRequest):
+    """
+    Parses a pasted or copied text tracklist into structured ExtractedTrackItem objects.
+    """
+    await verify_access_or_raise()
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty.")
+
+    try:
+        tracks = tracklist_extractor_service.parse_tracklist_lines(req.text)
+        return {
+            "status": "success",
+            "tracks": [t.model_dump() for t in tracks]
+        }
+    except Exception as e:
+        logger.error(f"Text tracklist parsing failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Text parsing failed: {e}")
+
+
+@app.post("/api/extract/enrich-spotify")
+async def enrich_extracted_endpoint(req: EnrichExtractedRequest):
+    """
+    Enriches extracted track items with Spotify artwork, duration, and BPM/Key if available.
+    """
+    await verify_access_or_raise()
+    try:
+        enriched = await tracklist_extractor_service.enrich_extracted_tracks_via_spotify(
+            tracks=req.tracks,
+            spotify_service=spotify_service
+        )
+        return {
+            "status": "success",
+            "tracks": [t.model_dump() for t in enriched]
+        }
+    except Exception as e:
+        logger.error(f"Spotify enrichment failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Enrichment failed: {e}")
+
+
+@app.post("/api/extract/queue-to-muzpa")
+async def queue_extracted_to_muzpa(req: QueueExtractedRequest):
+    """
+    Converts reviewed/edited extracted tracks into an active PlaylistJob and starts Muzpa crawling.
+    """
+    await verify_access_or_raise()
+    if not req.tracks:
+        raise HTTPException(status_code=400, detail="No tracks provided to queue.")
+
+    try:
+        playlist_job = tracklist_extractor_service.create_playlist_job_from_extracted(
+            tracks=req.tracks,
+            playlist_name=req.playlist_name or "Extracted Tracklist",
+            auto_mode=req.auto_mode,
+            similarity_threshold=req.similarity_threshold
+        )
+    except Exception as e:
+        logger.error(f"Failed to create playlist job from extracted tracks: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    await orchestrator.start_job(playlist_job)
+    return {"status": "success", "job": playlist_job.model_dump()}
 
 
 
