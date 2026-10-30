@@ -93,7 +93,8 @@ def test_extract_text_from_image_vision():
         "2 - EMPHI - ANTHOZOA\n"
         "3 - TATO SECO - CARAXES\n"
     )
-    with patch("tracklist_extractor_service.extract_text_with_apple_vision", return_value=sample_text):
+    with patch("tracklist_extractor_service.is_macos_vision_available", return_value=True), \
+         patch("tracklist_extractor_service.extract_text_with_apple_vision", return_value=sample_text):
         raw_text = extract_text_from_image(image_bytes=b"fake-image-bytes")
         assert "PHASEBREAKER" in raw_text
         assert "ANTHOZOA" in raw_text
@@ -105,6 +106,20 @@ def test_extract_text_from_image_vision():
         assert "PHASEBREAKER" in tracks[0].title
         assert "EMPHI" in tracks[1].artist
         assert "ANTHOZOA" in tracks[1].title
+
+
+def test_extract_text_from_image_pytesseract_fallback():
+    sample_text = (
+        "1 - FALLBACK ARTIST - FALLBACK TITLE\n"
+    )
+    with patch("tracklist_extractor_service.is_macos_vision_available", return_value=False), \
+         patch("tracklist_extractor_service.extract_text_with_pytesseract", return_value=sample_text):
+        raw_text = extract_text_from_image(image_bytes=b"fake-image-bytes")
+        assert "FALLBACK ARTIST" in raw_text
+        tracks = parse_tracklist_lines(raw_text)
+        assert len(tracks) == 1
+        assert tracks[0].artist == "FALLBACK ARTIST"
+        assert tracks[0].title == "FALLBACK TITLE"
 
 
 def test_server_extract_endpoints():
