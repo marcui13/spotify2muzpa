@@ -399,7 +399,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    fav = Path(__file__).resolve().parent / "static" / "favicon.ico"
+    fav = settings.BASE_DIR / "static" / "favicon.ico"
     if fav.exists():
         return FileResponse(str(fav), media_type="image/x-icon")
     return Response(status_code=204)
@@ -1419,9 +1419,9 @@ async def export_dj_set_to_youtube(payload: Dict[str, Any]):
 
 
 # Mount static frontend
-static_dir = Path(__file__).resolve().parent / "static"
-static_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+static_dir = settings.BASE_DIR / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 @app.get("/")

@@ -2,16 +2,34 @@ import warnings
 warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*")
 warnings.filterwarnings("ignore", category=UserWarning)
 
+import os
 import sys
 import time
 import socket
 import logging
 import threading
+import multiprocessing
 import uvicorn
 from pathlib import Path
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+# Setup logging (both stdout and optional persistent log file)
+log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+
+try:
+    if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            log_dir = Path.home() / "Library" / "Logs" / "Spotify2MuzpaStudio"
+        elif sys.platform == "win32":
+            log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Spotify2MuzpaStudio" / "logs"
+        else:
+            log_dir = Path.home() / ".spotify2muzpa" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_dir / "desktop.log", encoding="utf-8"))
+except Exception:
+    pass
+
+logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers)
 logger = logging.getLogger("desktop_app")
 
 
@@ -31,39 +49,41 @@ def find_free_port(preferred_port: int = 8000) -> int:
         return s.getsockname()[1]
 
 
-import os
 os.environ["IS_DESKTOP_APP"] = "1"
 os.environ["OPEN_DASHBOARD_TAB"] = "false"
 
 
 def start_server_thread(host: str, port: int):
     """Starts Uvicorn FastAPI server in a dedicated background daemon thread."""
-    import asyncio
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        import asyncio
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        except Exception as e:
+            logger.debug(f"Event loop setup notice: {e}")
+
+        from config import settings
+        settings.IS_DESKTOP_APP = True
+        settings.OPEN_DASHBOARD_TAB = False
+        settings.HOST = host
+        settings.PORT = port
+
+        from server import app
+        config = uvicorn.Config(
+            app=app,
+            host=host,
+            port=port,
+            log_level="info",
+            access_log=False
+        )
+        server = uvicorn.Server(config)
+        server.run()
     except Exception as e:
-        logger.debug(f"Event loop setup notice: {e}")
-
-    from config import settings
-    settings.IS_DESKTOP_APP = True
-    settings.OPEN_DASHBOARD_TAB = False
-    settings.HOST = host
-    settings.PORT = port
-
-    from server import app
-    config = uvicorn.Config(
-        app=app,
-        host=host,
-        port=port,
-        log_level="info",
-        access_log=False
-    )
-    server = uvicorn.Server(config)
-    server.run()
+        logger.error(f"Fatal error in FastAPI server thread: {e}", exc_info=True)
 
 
-def wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
+def wait_for_server(host: str, port: int, timeout: float = 15.0) -> bool:
     """Waits until the local server accepts TCP connections."""
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -92,7 +112,7 @@ def main():
     )
     server_thread.start()
 
-    if not wait_for_server(host, port, timeout=8.0):
+    if not wait_for_server(host, port, timeout=15.0):
         logger.error("Failed to start local background server in time.")
         sys.exit(1)
 
@@ -122,10 +142,16 @@ def main():
         except KeyboardInterrupt:
             logger.info("Shutting down...")
     except Exception as e:
-        logger.error(f"Error initializing desktop GUI window: {e}")
+        logger.error(f"Error initializing desktop GUI window: {e}", exc_info=True)
         import webbrowser
         webbrowser.open(app_url)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()
