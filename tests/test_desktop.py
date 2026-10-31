@@ -24,8 +24,9 @@ def test_server_import_in_thread():
         except Exception as e:
             error_occurred.append(e)
 
-    t = threading.Thread(target=run_import)
+    t = threading.Thread(target=run_import, daemon=True)
     t.start()
+    t.join(timeout=5.0)
     assert len(error_occurred) == 0, f"Thread import raised: {error_occurred}"
 
 

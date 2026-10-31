@@ -83,6 +83,8 @@ En implementaciones tradicionales de scraping para plataformas SPA como Muzpa, e
 - 🌐 **Selector Interactivo de Navegadores:** Compatible con **Google Chrome**, **Brave Browser**, **Microsoft Edge** y **Chromium empaquetado**.
 - 📁 **Organización Automática:** Guarda los archivos en `~/Downloads/<Nombre de la Playlist>/<Artista> - <Título>.mp3`.
 - 🧠 **Motor de Coincidencia Difusa (`RapidFuzz`):** Scoring ponderado (Título 40%, Artista 30%, Combinado 30%) con bonificación/penalización por desvío de duración en segundos.
+- 🔍 **Filtro Inteligente y Creador de Sub-Playlists de Spotify:** Permite pasar el link de cualquier playlist de Spotify y un filtro (o prompt conversacional, ej: *"quiero hacer una playlist con todos los tracks de guyj que hay acá https://open.spotify.com/playlist/..."*), previsualizar las canciones con fuzzy matching (ej: "guyj" coincide con "Guy J"), deseleccionar o seleccionar tracks, y crear al instante una nueva playlist en Spotify (vía OAuth o copiado de URIs Cmd+V), exportar a M3U8 o mandar a descargar en Muzpa.
+- 🎛 **Identificador de Tracklists en DJ Sets (SoundCloud / YouTube):** Detecta automáticamente listas completas de canciones con marcas de tiempo mediante una combinación híbrida de heurísticas textuales (capítulos de YouTube, descripciones, comentarios) y reconocimiento acústico (fingerprinting de Shazam). Se enriquece con Spotify y se envía directamente a descargar en Muzpa.
 - 🏷 **Etiquetado ID3 Oficial:** Escribe metadatos de Título, Artista y Álbum directamente en el MP3 descargado (`mutagen.easyid3`).
 - 💾 **Persistencia y Recuperación de Sesión:** Guarda el progreso en `state/job_<id>.json` para reanudar sin perder descargas previas.
 
@@ -116,6 +118,8 @@ El sistema fue construido utilizando una selección de librerías modernas de al
 | :--- | :--- | :--- |
 | **`rapidfuzz`** | `^3.0.0` | **Motor de coincidencia difusa (Fuzzy Matching) en C++.** Calcula similitud con `token_set_ratio` y `token_sort_ratio` ponderando título, artista y variaciones de nombres para clasificar los mejores resultados de Muzpa. |
 | **`mutagen`** | `^1.47.0` | **Manipulación y etiquetado de metadatos de audio.** Inyecta etiquetas oficiales ID3v2.3/ID3v2.4 (`EasyID3`, `MP3`) en los archivos `.mp3` descargados para que los reproductores y software de DJ (Traktor, Rekordbox, VirtualDJ) los reconozcan inmediatamente. |
+| **`yt-dlp`** | `^2024.0.0` | **Extracción de audio y metadatos.** Extrae capítulos, descripciones y pistas de audio de YouTube y SoundCloud sin descargas innecesarias. |
+| **`shazamio-core`** | `^1.1.0` | **Reconocimiento acústico.** Genera huellas acústicas nativas en Rust y consulta la base de datos de Shazam de forma gratuita y local. |
 
 ### 5. Validación de Datos, Configuración y CLI
 | Librería | Versión | Rol en el Proyecto |
@@ -210,6 +214,57 @@ python run.py --playlist-url "https://open.spotify.com/playlist/37i9dQZF1DXcBWIG
 
 # Modo 100% automático:
 python run.py --playlist-url "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M" --auto --threshold 80
+```
+
+---
+
+### Modo 4: Identificador de Tracklists en DJ Sets (SoundCloud / YouTube)
+Para extraer el tracklist completo de sesiones de DJs, sets en vivo (Cercle, Boiler Room, etc.) o mezclas de SoundCloud:
+1. Inicia el servidor con `python server.py` y abre `http://localhost:8000`.
+2. Haz clic en la pestaña **"DJ Set Link (YouTube / SoundCloud)"**.
+3. Pega cualquier enlace de YouTube o SoundCloud (por ejemplo, sets de 1 a 3+ horas).
+4. Haz clic en **"Identify Tracklist"**:
+   - **Capa Heurística:** Si el set tiene marcas de tiempo en la descripción, capítulos o comentarios fijados, se extraen instantáneamente en < 2 segundos.
+   - **Capa Acústica Adaptativa (Shazam):** Si el set no tiene lista de temas escrita, el sistema descarga el stream en segundo plano, corta fragmentos inteligentes con `ffmpeg`, los identifica con huellas acústicas nativas de Shazam evitando rate-limits mediante saltos adaptativos de 3 minutos, y enriquece cada track con BPM, Tonalidad Camelot (ej. `8A`, `11B`) y carátula oficial de Spotify.
+5. **Reproducción directa y Exportación:**
+   - **Spotify App-First:** Al hacer clic en "Spotify" en cualquier track o en la tarjeta de Spotlight, se intenta abrir de inmediato la aplicación oficial de Spotify de escritorio (`spotify:track:...`); si no está instalada, abre automáticamente la versión web.
+   - **YouTube:** Abre el video directamente en la marca de tiempo exacta del DJ set (si la fuente es YouTube) o la búsqueda del tema.
+   - **Export to Spotify:** Crea automáticamente la playlist con título, descripción y tracks en tu cuenta de Spotify vinculada vía OAuth, o te permite copiar los URIs al portapapeles con 1 clic para pegarlos con `Cmd+V` (o `Ctrl+V`) en cualquier playlist de Spotify.
+   - **Export to YouTube:** Resuelve los IDs de video y genera una cola de reproducción multi-video continua (`https://www.youtube.com/watch_videos?video_ids=...`), lista para reproducir o guardar con el botón "+ Guardar playlist" de YouTube sin requerir claves de API complejas.
+   - **Download in Muzpa:** Envía la lista de temas directamente a la cola de búsqueda y descarga automática de MP3s a 320 kbps.
+
+
+---
+
+## 🧹 Gestión de Archivos y Almacenamiento Local (Limpieza de Temporales)
+
+Para mantener el disco limpio y optimizado, es importante comprender qué archivos se guardan y dónde:
+
+### 1. ¿Dónde se guardan los archivos descargados definitivos?
+- **Destino:** Por defecto, las canciones finales descargadas en MP3 (320 kbps) con sus etiquetas ID3 oficiales se guardan en:
+  - macOS / Linux: `~/Downloads/<Nombre de la Playlist o DJ Set>/`
+  - Windows: `C:\Users\<TuUsuario>\Downloads\<Nombre de la Playlist o DJ Set>\`
+- Puedes cambiar este directorio editando `DOWNLOAD_DIR` en tu archivo `.env`.
+
+### 2. ¿Dónde se guardan los archivos temporales de análisis acústico?
+- **Directorios temporales del sistema:** Durante el análisis acústico de DJ sets largos, `yt-dlp` y `ffmpeg` procesan el audio dentro de carpetas temporales con prefijo `djset_audio_` y `djset_slices_`.
+  - En macOS: Se ubican bajo `/var/folders/.../T/` o `/tmp/`.
+  - En Linux / Windows: Se ubican en el directorio temporal estándar del sistema operativo.
+- **Autolimpieza automática:** El código utiliza administradores de contexto seguros de Python (`tempfile.TemporaryDirectory`). **Tan pronto como finaliza o se cancela el análisis, la carpeta temporal completa y el audio descargado se eliminan automáticamente del disco.** Además, cada fragmento individual `.wav` se borra en memoria/disco inmediatamente tras ser reconocido por Shazam.
+
+### 3. Cómo limpiar datos en caché periódicamente
+Si utilizas la aplicación con frecuencia, puedes liberar espacio residual de las siguientes fuentes:
+
+```bash
+# 1. Limpiar la caché interna de descargas de yt-dlp:
+yt-dlp --rm-cache-dir
+
+# 2. Limpiar perfiles temporales de navegador antiguos (si deseas reiniciar sesión en Muzpa):
+rm -rf user_data_profile/
+
+# 3. Limpiar archivos de caché de Python y temporales de pytest:
+find . -type d -name "__pycache__" -exec rm -rf {} +
+rm -rf .pytest_cache
 ```
 
 ---
