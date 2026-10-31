@@ -347,17 +347,18 @@ dj_set_service = DJSetService(spotify_service)
 async def lifespan(app_instance: FastAPI):
     logger.info("Initializing Spotify to Muzpa Backend Service...")
     
-    async def auto_open_browser():
-        await asyncio.sleep(1.0)
-        if not settings.HEADLESS and settings.AUTO_LAUNCH_BROWSER:
-            try:
-                open_tab = settings.OPEN_DASHBOARD_TAB and not settings.IS_DESKTOP_APP
-                logger.info(f"Initializing crawler browser (open_dashboard_tab={open_tab})...")
-                await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=open_tab)
-            except Exception as e:
-                logger.warning(f"Browser auto-open background notice: {e}")
+    if settings.AUTO_LAUNCH_BROWSER and not settings.IS_DESKTOP_APP:
+        async def auto_open_browser():
+            await asyncio.sleep(1.0)
+            if not settings.HEADLESS and settings.AUTO_LAUNCH_BROWSER and not settings.IS_DESKTOP_APP:
+                try:
+                    open_tab = settings.OPEN_DASHBOARD_TAB
+                    logger.info(f"Initializing crawler browser (open_dashboard_tab={open_tab})...")
+                    await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=open_tab)
+                except Exception as e:
+                    logger.warning(f"Browser auto-open background notice: {e}")
 
-    asyncio.create_task(auto_open_browser())
+        asyncio.create_task(auto_open_browser())
     yield
     logger.info("Shutting down services and browser context...")
     orchestrator.download_queue.stop()
@@ -492,10 +493,10 @@ async def save_muzpa_credentials(payload: Dict[str, Any]):
     except Exception as e:
         logger.debug(f"Notice updating .env: {e}")
 
-    # Launch browser and open Muzpa tab if not already initialized
+    # Launch Chrome browser and open Muzpa tab if not already initialized
     try:
-        if not orchestrator.crawler.is_initialized or not orchestrator.crawler.page:
-            logger.info("Initializing browser crawler to open Muzpa tab...")
+        if not orchestrator.crawler.is_initialized:
+            logger.info(f"Initializing {settings.BROWSER_NAME} crawler to open Muzpa tab...")
             await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=False)
         elif orchestrator.crawler.page:
             if "muzpa.com" not in orchestrator.crawler.page.url:
@@ -504,15 +505,10 @@ async def save_muzpa_credentials(payload: Dict[str, Any]):
         # Trigger immediate auto-fill on active page
         await orchestrator.crawler.autofill_login_form(email=email, password=password, submit=auto_submit)
 
-        # Bring Muzpa browser window to the front
+        # Bring Chrome browser window to the front
         await orchestrator.crawler.bring_muzpa_to_front()
     except Exception as e:
-        logger.warning(f"Notice opening Muzpa crawler tab: {e}")
-        try:
-            import webbrowser
-            webbrowser.open(settings.MUZPA_BASE_URL)
-        except Exception:
-            pass
+        logger.error(f"Error launching Muzpa Chrome crawler: {e}", exc_info=True)
 
     return {"status": "saved", "email": email}
 
@@ -525,7 +521,7 @@ async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
     focus = payload.get("focus", True)
 
     try:
-        if not orchestrator.crawler.is_initialized or not orchestrator.crawler.page:
+        if not orchestrator.crawler.is_initialized:
             await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=False)
         elif orchestrator.crawler.page and "muzpa.com" not in orchestrator.crawler.page.url:
             await orchestrator.crawler.page.goto(settings.MUZPA_BASE_URL, wait_until="domcontentloaded", timeout=15000)
@@ -535,13 +531,8 @@ async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
             await orchestrator.crawler.bring_muzpa_to_front()
         return {"status": "success" if success else "form_not_found"}
     except Exception as e:
-        logger.warning(f"Auto-fill error notice: {e}")
-        try:
-            import webbrowser
-            webbrowser.open(settings.MUZPA_BASE_URL)
-        except Exception:
-            pass
-        return {"status": "opened_fallback", "detail": str(e)}
+        logger.error(f"Auto-fill error in Chrome crawler: {e}", exc_info=True)
+        return {"status": "error", "detail": str(e)}
 
 
 @app.post("/api/playlist/load")
@@ -1177,12 +1168,11 @@ async def focus_browser_tab(payload: Dict[str, Any]):
     """Focuses Muzpa or Dashboard tab in the Chromium browser window."""
     target = payload.get("target", "muzpa")
     if target == "muzpa":
-        if not orchestrator.crawler.is_initialized or not orchestrator.crawler.page:
+        if not orchestrator.crawler.is_initialized:
             try:
                 await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=False)
-            except Exception:
-                import webbrowser
-                webbrowser.open(settings.MUZPA_BASE_URL)
+            except Exception as e:
+                logger.error(f"Error initializing crawler on focus: {e}", exc_info=True)
         await orchestrator.crawler.bring_muzpa_to_front()
     else:
         await orchestrator.crawler.bring_dashboard_to_front()

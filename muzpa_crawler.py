@@ -365,15 +365,18 @@ class MuzpaCrawlerEngine:
             logger.info("Crawler Engine closed.")
 
     @property
-    def page(self) -> Page:
-        if not self._page:
-            raise RuntimeError("Crawler engine not initialized. Call initialize() first.")
+    def is_initialized(self) -> bool:
+        """Returns True if the crawler browser context and page are active."""
+        return bool(self._is_initialized and self._context and self._page and not self._page.is_closed())
+
+    @property
+    def page(self) -> Optional[Page]:
+        """Returns active Muzpa Page or None if not initialized."""
         return self._page
 
     @property
-    def context(self) -> BrowserContext:
-        if not self._context:
-            raise RuntimeError("Crawler engine context not initialized.")
+    def context(self) -> Optional[BrowserContext]:
+        """Returns active BrowserContext or None if not initialized."""
         return self._context
 
     async def autofill_login_form(self, email: Optional[str] = None, password: Optional[str] = None, submit: bool = False) -> bool:

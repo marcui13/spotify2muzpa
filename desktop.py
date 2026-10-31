@@ -51,6 +51,7 @@ def find_free_port(preferred_port: int = 8000) -> int:
 
 os.environ["IS_DESKTOP_APP"] = "1"
 os.environ["OPEN_DASHBOARD_TAB"] = "false"
+os.environ["AUTO_LAUNCH_BROWSER"] = "false"
 
 
 def start_server_thread(host: str, port: int):
@@ -66,6 +67,7 @@ def start_server_thread(host: str, port: int):
         from config import settings
         settings.IS_DESKTOP_APP = True
         settings.OPEN_DASHBOARD_TAB = False
+        settings.AUTO_LAUNCH_BROWSER = False
         settings.HOST = host
         settings.PORT = port
 
