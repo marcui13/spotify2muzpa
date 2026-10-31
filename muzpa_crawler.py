@@ -319,6 +319,22 @@ class MuzpaCrawlerEngine:
             except Exception as e:
                 logger.debug(f"Could not focus Muzpa tab: {e}")
 
+        # Activate browser window at the OS level
+        try:
+            import sys
+            import subprocess
+            if sys.platform == "darwin":
+                app_map = {
+                    "chrome": "Google Chrome",
+                    "brave": "Brave Browser",
+                    "edge": "Microsoft Edge",
+                    "chromium": "Chromium"
+                }
+                app_name = app_map.get(getattr(self, "browser_name", "chrome").lower(), "Google Chrome")
+                subprocess.Popen(["osascript", "-e", f'tell application "{app_name}" to activate'])
+        except Exception as os_e:
+            logger.debug(f"OS window focus notice: {os_e}")
+
     async def bring_dashboard_to_front(self) -> None:
         if self._dashboard_page:
             try:

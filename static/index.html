@@ -787,7 +787,7 @@
           Auto-fill Tab Now
         </button>
         <button onclick="saveMuzpaCredentials()" class="bg-spotify hover:bg-spotify-hover text-black text-xs font-bold px-5 py-2 rounded-xl transition shadow-lg shadow-spotify/20">
-          Save & Auto-fill
+          Save & Open Muzpa
         </button>
       </div>
     </div>
@@ -1161,10 +1161,10 @@
         const data = await res.json();
         if (res.ok) {
           msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800";
-          msgBox.innerText = "✓ Saved to .env and auto-filled in Muzpa tab!";
+          msgBox.innerText = "✓ Saved & Opening Muzpa tab in browser...";
           msgBox.classList.remove("hidden");
           document.getElementById("muzpaCredsLabel").innerText = "Muzpa: " + email.split("@")[0];
-          setTimeout(closeMuzpaModal, 1200);
+          setTimeout(closeMuzpaModal, 1500);
         } else {
           msgBox.className = "text-xs py-2 px-3 rounded-lg mt-1 font-mono bg-rose-950/80 text-rose-400 border border-rose-800";
           msgBox.innerText = "Error: " + (data.detail || "Could not save");

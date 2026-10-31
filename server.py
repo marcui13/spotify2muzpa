@@ -473,25 +473,46 @@ async def save_muzpa_credentials(payload: Dict[str, Any]):
     settings.MUZPA_PASSWORD = password
 
     # Update .env file
-    env_file = settings.BASE_DIR / ".env"
-    if env_file.exists():
-        content = env_file.read_text(encoding="utf-8")
-        if "MUZPA_EMAIL=" in content:
-            content = re.sub(r'MUZPA_EMAIL=.*', f'MUZPA_EMAIL="{email}"', content)
-        else:
-            content += f'\nMUZPA_EMAIL="{email}"'
-
-        if "MUZPA_PASSWORD=" in content:
-            content = re.sub(r'MUZPA_PASSWORD=.*', f'MUZPA_PASSWORD="{password}"', content)
-        else:
-            content += f'\nMUZPA_PASSWORD="{password}"'
-        env_file.write_text(content, encoding="utf-8")
-
-    # Trigger immediate auto-fill on active page
     try:
-        await orchestrator.crawler.autofill_login_form(email=email, password=password, submit=auto_submit)
+        env_file = settings.BASE_DIR / ".env"
+        if not env_file.exists() and hasattr(settings, "STATE_DIR"):
+            env_file = settings.STATE_DIR / ".env"
+        if env_file.exists():
+            content = env_file.read_text(encoding="utf-8")
+            if "MUZPA_EMAIL=" in content:
+                content = re.sub(r'MUZPA_EMAIL=.*', f'MUZPA_EMAIL="{email}"', content)
+            else:
+                content += f'\nMUZPA_EMAIL="{email}"'
+
+            if "MUZPA_PASSWORD=" in content:
+                content = re.sub(r'MUZPA_PASSWORD=.*', f'MUZPA_PASSWORD="{password}"', content)
+            else:
+                content += f'\nMUZPA_PASSWORD="{password}"'
+            env_file.write_text(content, encoding="utf-8")
     except Exception as e:
-        logger.debug(f"Auto-fill on credential save notice: {e}")
+        logger.debug(f"Notice updating .env: {e}")
+
+    # Launch browser and open Muzpa tab if not already initialized
+    try:
+        if not orchestrator.crawler.is_initialized or not orchestrator.crawler.page:
+            logger.info("Initializing browser crawler to open Muzpa tab...")
+            await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=False)
+        elif orchestrator.crawler.page:
+            if "muzpa.com" not in orchestrator.crawler.page.url:
+                await orchestrator.crawler.page.goto(settings.MUZPA_BASE_URL, wait_until="domcontentloaded", timeout=15000)
+
+        # Trigger immediate auto-fill on active page
+        await orchestrator.crawler.autofill_login_form(email=email, password=password, submit=auto_submit)
+
+        # Bring Muzpa browser window to the front
+        await orchestrator.crawler.bring_muzpa_to_front()
+    except Exception as e:
+        logger.warning(f"Notice opening Muzpa crawler tab: {e}")
+        try:
+            import webbrowser
+            webbrowser.open(settings.MUZPA_BASE_URL)
+        except Exception:
+            pass
 
     return {"status": "saved", "email": email}
 
@@ -503,11 +524,24 @@ async def trigger_muzpa_autofill(payload: Dict[str, Any] = None):
     submit = payload.get("submit", False)
     focus = payload.get("focus", True)
 
-    success = await orchestrator.crawler.autofill_login_form(submit=submit)
-    if focus:
-        await orchestrator.crawler.bring_muzpa_to_front()
+    try:
+        if not orchestrator.crawler.is_initialized or not orchestrator.crawler.page:
+            await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=False)
+        elif orchestrator.crawler.page and "muzpa.com" not in orchestrator.crawler.page.url:
+            await orchestrator.crawler.page.goto(settings.MUZPA_BASE_URL, wait_until="domcontentloaded", timeout=15000)
 
-    return {"status": "success" if success else "form_not_found"}
+        success = await orchestrator.crawler.autofill_login_form(submit=submit)
+        if focus:
+            await orchestrator.crawler.bring_muzpa_to_front()
+        return {"status": "success" if success else "form_not_found"}
+    except Exception as e:
+        logger.warning(f"Auto-fill error notice: {e}")
+        try:
+            import webbrowser
+            webbrowser.open(settings.MUZPA_BASE_URL)
+        except Exception:
+            pass
+        return {"status": "opened_fallback", "detail": str(e)}
 
 
 @app.post("/api/playlist/load")
@@ -1143,6 +1177,12 @@ async def focus_browser_tab(payload: Dict[str, Any]):
     """Focuses Muzpa or Dashboard tab in the Chromium browser window."""
     target = payload.get("target", "muzpa")
     if target == "muzpa":
+        if not orchestrator.crawler.is_initialized or not orchestrator.crawler.page:
+            try:
+                await orchestrator.initialize(browser_name=settings.BROWSER_NAME, open_dashboard_tab=False)
+            except Exception:
+                import webbrowser
+                webbrowser.open(settings.MUZPA_BASE_URL)
         await orchestrator.crawler.bring_muzpa_to_front()
     else:
         await orchestrator.crawler.bring_dashboard_to_front()
